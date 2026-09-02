@@ -1,0 +1,30 @@
+{
+  "name": "shotlist",
+  "version": "1.0.0",
+  "description": "MCP camera + timeline for directing webapp demo shots after the take",
+  "type": "module",
+  "bin": {
+    "shotlist-mcp": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/bin.js",
+    "dev": "tsx src/bin.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "sharp": "^0.34.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

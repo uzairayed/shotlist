@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "product": "tagiser",
+  "url": "https://www.tagiser.com",
+  "audience": "parents who would order name labels tonight",
+  "language": "nb",
+  "target_seconds": 25,
+  "story": "pick what the kid loves → generated unique labels → customize, stop before payment",
+  "pages": [
+    {
+      "url": "https://www.tagiser.com",
+      "promise": "Personal name labels inspired by the child's interests",
+      "cta": "Lag navnelapper",
+      "notes": "Headline: Ingen barn er like – heller ikke navnelappene. Price shown: Frakt kr 9,- / Totalt Kr 208. Skip FAQ accordion and cookie chrome."
+    },
+    {
+      "url": "https://www.tagiser.com/generation?fromLanding=true",
+      "promise": "Create personalized labels: category → interest → icon → background",
+      "cta": "Velg kategori / Kjøp nå",
+      "notes": "Real create URL (not /lag-navnelapper which 404s). Categories verified live: Dinosaur, Sport, Kjøretøy, Gaming, Rommet, Eventyr, Havdyr, Gård, Ville dyr, Superhelter, Insekter, Mat & godteri. Order panel shows 100 navnelapper / 208 kr (199+9 frakt). Stop before Vipps payment."
+    }
+  ],
+  "magic": "generated unique designs after picking a category (icon proposals)",
+  "skip": ["FAQ", "legal", "payment", "cookie banner", "Vipps checkout", "account signup"],
+  "beats": [
+    {
+      "id": "b1",
+      "name": "land",
+      "url": "https://www.tagiser.com",
+      "action": "hold on homepage",
+      "why": "promise in one glance",
+      "hold": "headline + Lag navnelapper",
+      "camera": "wide then push to CTA",
+      "skip_if": null
+    },
+    {
+      "id": "b2",
+      "name": "start",
+      "url": "https://www.tagiser.com/generation?fromLanding=true",
+      "action": "Click Lag navnelapper",
+      "why": "Enter the product",
+      "hold": "First create-step chrome (Velg en kategori)",
+      "camera": "follow cursor, land on the next screen"
+    },
+    {
+      "id": "b3",
+      "name": "category",
+      "url": "https://www.tagiser.com/generation?fromLanding=true",
+      "action": "Pick Dinosaur category tile",
+      "why": "Personal, not generic",
+      "hold": "Tile art + label",
+      "camera": "push-in on the chosen tile"
+    },
+    {
+      "id": "b4",
+      "name": "generate",
+      "url": "https://www.tagiser.com/generation?fromLanding=true",
+      "action": "Wait for unique design/icon proposals",
+      "why": "Magic moment — this is the demo",
+      "hold": "Generated art must be readable",
+      "camera": "wide then push to chosen design"
+    },
+    {
+      "id": "b5",
+      "name": "customize",
+      "url": "https://www.tagiser.com/generation?fromLanding=true",
+      "action": "Change background or name",
+      "why": "It's theirs",
+      "hold": "Before/after of the label preview",
+      "camera": "pan to control, then to live preview"
+    },
+    {
+      "id": "b6",
+      "name": "result",
+      "url": "https://www.tagiser.com/generation?fromLanding=true",
+      "action": "Hold on order panel with price, stop before Vipps",
+      "why": "Close on I could order this",
+      "hold": "Name, design, 208 kr total",
+      "camera": "hold on label + total"
+    }
+  ]
+}

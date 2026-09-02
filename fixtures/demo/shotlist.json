@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "shots": [
+    {
+      "id": "s1",
+      "take": "take_demo",
+      "src": {
+        "in": 0,
+        "out": 2
+      },
+      "camera": {
+        "from": {
+          "x": 0.5,
+          "y": 0.5,
+          "zoom": 1
+        },
+        "to": {
+          "target": "#email",
+          "padding": 80
+        },
+        "duration": 0.8,
+        "ease": "ease-out"
+      },
+      "cursor": {
+        "visible": true,
+        "from": {
+          "x": 0.5,
+          "y": 0.8
+        },
+        "to": {
+          "target": "#email"
+        },
+        "travel": 0.45,
+        "dwell_ms": 180,
+        "click_at": 1.85
+      },
+      "freeze_ms": 400,
+      "transition_in": {
+        "type": "cut"
+      }
+    },
+    {
+      "id": "s2",
+      "take": "take_demo",
+      "src": {
+        "in": 2,
+        "out": 5
+      },
+      "camera": {
+        "from": {
+          "target": "#email",
+          "padding": 80
+        },
+        "to": {
+          "target": "#signup",
+          "padding": 64
+        },
+        "duration": 0.7,
+        "ease": "ease-in-out"
+      },
+      "cursor": {
+        "visible": true,
+        "from": "previous",
+        "to": {
+          "target": "#signup"
+        },
+        "travel": 0.4,
+        "dwell_ms": 180,
+        "click_at": 4.8
+      },
+      "freeze_ms": 600,
+      "transition_in": {
+        "type": "cut"
+      }
+    }
+  ],
+  "callouts": [
+    {
+      "id": "c1",
+      "take": "take_demo",
+      "src_in": 4.5,
+      "src_out": 5.6,
+      "target": "#signup",
+      "label": "Create account",
+      "style": "highlight"
+    }
+  ]
+}
