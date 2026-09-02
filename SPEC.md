@@ -89,42 +89,35 @@ Map each beat → one or more shots in `shotlist.json` (`beat` field on the shot
 
 ---
 
-## 1B. First demo requirement: [tagiser.com](https://www.tagiser.com)
+## 1B. Default storyboard (any webapp)
 
-v1 is not done until this demo can be planned + directed (capture may still be ingest). Tagiser is the fixture product.
+The operator names the product and URL in `plan.json`. This spec does not bake in a particular site.
 
-**What it is:** Norwegian shop for personalized name labels (navnelapper) for kids’ clothes and gear. Pitch: no two kids are alike, so the labels aren’t either. Designs inspired by the child’s interests.
+v1 is not done until **some** live webapp can run analyze → plan → ingest/capture → shots → preview → render.
 
-**Audience of the demo:** a parent who would order tonight. Language on screen stays Norwegian. Do not dub.
+**Analyze checklist (live site, before any tape):**
 
-**Hero story (one sentence):** pick what the kid loves → Tagiser generates unique label designs → customize and the order looks real.
+1. Entry URL — headline, primary CTA, what’s above the fold.
+2. Core flow behind that CTA — click it; write the **real** URLs (don’t guess paths).
+3. The **magic moment**: the frame that would make someone want this. How long it takes. What must stay sharp.
+4. One follow-up action that proves it worked (tweak, save, export, add).
+5. Result state to end on. Stop before payment, passwords, or admin.
+6. Skip list: FAQ, cookie banners (dismiss before record), legal, duplicate galleries, settings.
 
-**Analyze checklist (do this on the live site before any tape):**
-
-1. Homepage (`https://www.tagiser.com`) — headline, “Lag navnelapper” CTA, 3-step section, social proof / examples, price if shown (`Frakt kr 9,-` / totals like `Kr 208` have appeared on the marketing page).
-2. The create flow behind **Lag navnelapper** — find the real URL by clicking; do not assume `/lag-navnelapper` (that 404s). Note every step: category → generated proposals → customize → cart/checkout.
-3. Categories actually offered (copy on the homepage: dyr, sport, eventyr, gaming, dinosaur, prinsesse, sportsbil — verify live).
-4. What the **generated designs** look like on screen (grid vs hero, how long generation takes, whether it is the magic frame).
-5. Customize controls (background, name, preview of a physical label).
-6. Cart / price / shipping — only if we end there; do not film payment, passwords, or a real checkout complete.
-7. What to **skip:** FAQ accordion, cookie banners (dismiss before record), legal, identical “bli inspirert” carousels unless one card is the open.
-
-**Planned beats for demo v1** (adjust after analyze, this is the default storyboard):
+**Default beats** (rename after analyze; drop any beat without a `why`):
 
 | id | name | action | why | camera | hold |
 |---|---|---|---|---|---|
-| b1 | land | Homepage, no click yet | Promise in one glance | wide, then slow push toward CTA | Headline + “Lag navnelapper” readable |
-| b2 | start | Click **Lag navnelapper** | Enter the product | follow cursor, land on the next screen | First create-step chrome |
-| b3 | category | Pick one kid-interest category (prefer dinosaur or whatever analyze says is visually strongest) | Personal, not generic | push-in on the chosen tile | Tile art + label |
-| b4 | generate | Wait for unique design proposals | **Magic moment** — this is the demo | wide enough to see several designs, then push to the chosen one | Generated art must be readable, not a blur |
-| b5 | customize | Change one thing (background or name) | It’s theirs | pan to control, then to the live preview | Before/after of the label |
-| b6 | result | Cart or preview with price, **stop before payment** | Close on “I could order this” | hold on label + total | Name, design, price |
+| b1 | land | Entry URL, no click yet | Promise in one glance | wide, then slow push toward CTA | Headline + primary CTA readable |
+| b2 | start | Click the primary CTA | Enter the product | follow cursor, land on next screen | First flow chrome |
+| b3 | choose | Pick the thing that makes this instance specific | Personal, not generic | push-in on the choice | Choice art + label |
+| b4 | magic | Wait for the distinctive result | This is the demo | wide enough to see it, then push in | Result readable, not a blur |
+| b5 | tweak | Change one thing | It’s theirs / it works | pan to control, then to live preview | Before/after |
+| b6 | result | End state, stop before payment/secrets | Close on “I could use this” | hold on the output | Result readable |
 
-Target finished length: **20–30 seconds**. If generation is slow, freeze or cut after the result is on screen — do not watch a spinner for 8s.
+Target finished length: **20–30 seconds**. If a spinner is slow, freeze or cut after the result is on screen — do not watch loading.
 
-**Out of this demo:** FAQ, account signup, address forms, payment, admin, English recut.
-
-**plan.json for this demo** must use `"product": "tagiser"`, `"url": "https://www.tagiser.com"`. Acceptance: I can `get_plan` and see these beats (or an analyze-updated version with real URLs/selectors) before any shotlist.
+**Always out:** FAQ tours, signup walls, address forms, payment, admin.
 
 ---
 
@@ -559,30 +552,30 @@ The demo plan. Required process, cheap to implement (JSON file).
 {
   "plan": {
     "version": 1,
-    "product": "tagiser",
-    "url": "https://www.tagiser.com",
-    "audience": "parents who would order name labels tonight",
-    "language": "nb",
+    "product": "acme",
+    "url": "https://example.com",
+    "audience": "the person who would use this tonight",
+    "language": "en",
     "target_seconds": 25,
-    "story": "pick what the kid loves → generated unique labels → customize, stop before payment",
+    "story": "see the promise → enter the flow → distinctive result → one tweak → stop before payment/secrets",
     "pages": [
       {
-        "url": "https://www.tagiser.com",
-        "promise": "Personal name labels inspired by the child's interests",
-        "cta": "Lag navnelapper",
+        "url": "https://example.com",
+        "promise": "one-sentence value prop from the headline",
+        "cta": "Get started",
         "notes": ""
       }
     ],
-    "magic": "generated unique designs after picking a category",
+    "magic": "the frame that would make someone want this",
     "skip": ["FAQ", "legal", "payment", "cookie banner"],
     "beats": [
       {
         "id": "b1",
         "name": "land",
-        "url": "https://www.tagiser.com",
-        "action": "hold on homepage",
+        "url": "https://example.com",
+        "action": "hold on the entry URL",
         "why": "promise in one glance",
-        "hold": "headline + Lag navnelapper",
+        "hold": "headline + primary CTA",
         "camera": "wide then push to CTA",
         "skip_if": null
       }
@@ -595,7 +588,7 @@ Validate: `version === 1`, `product` and `url` non-empty, `beats` is a non-empty
 
 `get_plan`: no args. Return `{ ok, plan }` or `NO_PLAN`.
 
-`set_shotlist` when `plan.json` is missing: still accept (so the fixture in §17 works), but always include warning `NO_PLAN`. For the tagiser demo, I will have a plan.
+`set_shotlist` when `plan.json` is missing: still accept (so the fixture in §17 works), but always include warning `NO_PLAN`. Real demos always have a plan.
 
 ---
 
@@ -803,7 +796,7 @@ List these tools in `tools/list` with the argument shapes above (JSON Schema). D
 ## 16. Agent loop this must support
 
 0. **Analyze** the live app. No MCP video tools yet. Fill pages / magic / skip.
-1. `set_plan` with beats (tagiser demo: §1B). `get_plan` to confirm.
+1. `set_plan` with beats (§1B template, URLs from analyze). `get_plan` to confirm.
 2. Capture or `ingest_take` **only those beats**.
 3. `get_take` + `preview_frame` with `source_t` (wide) to see the tape.
 4. `list_elements` at click times.
@@ -811,7 +804,7 @@ List these tools in `tools/list` with the argument shapes above (JSON Schema). D
 6. `preview_frame` on each shot landing (`shot_time ≈ camera.duration`). If crop clips, `update_shot` padding/zoom.
 7. `render`. Watch. Patch JSON. Render again.
 
-If step 6 has no picture, the loop is broken. If step 1 is missing, stop and plan — do not “just record tagiser.”
+If step 6 has no picture, the loop is broken. If step 1 is missing, stop and plan — do not just press record.
 
 ---
 
@@ -917,10 +910,10 @@ v1 is done when all of these pass:
 - [ ] Missing selector → warning, not crash.
 - [ ] No ffmpeg → `FFMPEG_MISSING`.
 - [ ] Linux: documented how to run the stdio server.
-- [ ] `set_plan` / `get_plan` round-trip the tagiser beat list (§1B).
+- [ ] `set_plan` / `get_plan` round-trip a beat list shaped like §1B.
 - [ ] `set_shotlist` without a plan returns warning `NO_PLAN`.
 - [ ] A shot may include `"beat": "b4"`; unknown beat → warning.
-- [ ] First real demo target is tagiser.com: analyze → plan → (ingest) → shots → preview → render. Magic beat is generated designs, not FAQ.
+- [ ] A real webapp can run analyze → plan → ingest → shots → preview → render. Magic beat is the distinctive result, not FAQ.
 
 Looks closer to Screen Studio than to a Selenium recording.
 
@@ -943,7 +936,7 @@ Looks closer to Screen Studio than to a Selenium recording.
 | Image in preview | Required |
 | GUI | Not required |
 | Record first | Forbidden. Analyze + plan first |
-| First demo | tagiser.com, 20–30s, stop before payment |
+| First demo | any live webapp named in plan.json, 20–30s, stop before payment/secrets |
 
 ---
 
@@ -953,4 +946,4 @@ Looks closer to Screen Studio than to a Selenium recording.
 - Binary in/out zoom flags
 - Live viewport zoom as the edit
 - Anything that forces me to re-record to change framing
-- A pipeline that starts at Record on tagiser without `plan.json`
+- A pipeline that starts at Record without `plan.json`
