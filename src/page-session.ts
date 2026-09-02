@@ -162,7 +162,14 @@ function collectElementsInPage(): RawCollected[] {
 
 // String source so Playwright addInitScript does not stringify a compiled
 // function that closes over esbuild's __name helper (missing in the page).
-export const INSTALL_PAGE_HOOKS_SOURCE = `(() => {
+// `__shotlistBound` is the current take's binding name so a later attach
+// re-hooks instead of keeping the previous take's dead function.
+export function installPageHooksSource(
+  bindingName = "shotlistPushEvent",
+): string {
+  const nameLit = JSON.stringify(bindingName);
+  return `(() => {
+  const bindingName = ${nameLit};
   const injectCursorHide = () => {
     if (document.querySelector("[data-shotlist-cursor-hide]")) return;
     const style = document.createElement("style");
@@ -177,8 +184,8 @@ export const INSTALL_PAGE_HOOKS_SOURCE = `(() => {
     document.addEventListener("DOMContentLoaded", injectCursorHide);
   }
   const w = window;
-  if (w.__shotlistBound) return;
-  w.__shotlistBound = true;
+  if (w.__shotlistBound === bindingName) return;
+  w.__shotlistBound = bindingName;
   const selectorBits = (el) => {
     if (!(el instanceof Element)) {
       return { tag: "div", nthOfType: 1 };
@@ -197,10 +204,14 @@ export const INSTALL_PAGE_HOOKS_SOURCE = `(() => {
     if (dataShotlist !== null) bits.dataShotlist = dataShotlist;
     return bits;
   };
+  const push = (ev) => {
+    const fn = w[bindingName];
+    if (typeof fn === "function") void fn(ev);
+  };
   document.addEventListener(
     "pointermove",
     (e) => {
-      void w.shotlistPushEvent?.({
+      push({
         type: "pointer_move",
         x: e.clientX,
         y: e.clientY,
@@ -211,7 +222,7 @@ export const INSTALL_PAGE_HOOKS_SOURCE = `(() => {
   document.addEventListener(
     "pointerdown",
     (e) => {
-      void w.shotlistPushEvent?.({
+      push({
         type: "pointer_down",
         button: e.button,
         x: e.clientX,
@@ -223,7 +234,7 @@ export const INSTALL_PAGE_HOOKS_SOURCE = `(() => {
   document.addEventListener(
     "pointerup",
     (e) => {
-      void w.shotlistPushEvent?.({
+      push({
         type: "pointer_up",
         button: e.button,
         x: e.clientX,
@@ -235,7 +246,7 @@ export const INSTALL_PAGE_HOOKS_SOURCE = `(() => {
   document.addEventListener(
     "click",
     (e) => {
-      void w.shotlistPushEvent?.({
+      push({
         type: "click",
         x: e.clientX,
         y: e.clientY,
@@ -247,11 +258,14 @@ export const INSTALL_PAGE_HOOKS_SOURCE = `(() => {
   document.addEventListener(
     "keydown",
     (e) => {
-      void w.shotlistPushEvent?.({ type: "keydown", key: e.key });
+      push({ type: "keydown", key: e.key });
     },
     true,
   );
 })();`;
+}
+
+export const INSTALL_PAGE_HOOKS_SOURCE = installPageHooksSource();
 
 async function onPageEvent(ev: PagePushEvent): Promise<void> {
   const rec = current;
@@ -363,7 +377,8 @@ async function closeBrowserQuietly(rec: {
 
 /**
  * Release everything we own. An attached browser belongs to the user: we stop
- * the screencast and drop our references, but never close or kill it.
+ * the screencast, detach our CDP session, and disconnect the Playwright
+ * websocket, but never close the user's page or kill Chrome.
  */
 async function releaseRecording(rec: {
   page?: Page;
@@ -394,6 +409,16 @@ async function releaseRecording(rec: {
         rec.page.off("framenavigated", rec.navHandler);
       } catch {
         /* page already gone */
+      }
+    }
+    // Disconnect our CDP websocket only. Do not close the user's page or
+    // context; browser.close() on connectOverCDP drops the connection
+    // without killing Chrome.
+    if (rec.browser) {
+      try {
+        await rec.browser.close();
+      } catch {
+        /* connection already gone */
       }
     }
     return;
@@ -727,17 +752,17 @@ async function pickAttachedPage(
   return { page: await context.newPage(), context };
 }
 
-async function bindAttachedHooks(page: Page): Promise<void> {
-  try {
-    await page.exposeFunction("shotlistPushEvent", onPageEvent);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!message.includes("already registered")) throw err;
-  }
-  await page.addInitScript({ content: INSTALL_PAGE_HOOKS_SOURCE });
+function eventBindingName(takeId: string): string {
+  return `shotlistPushEvent_${takeId.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+}
+
+async function bindAttachedHooks(page: Page, bindingName: string): Promise<void> {
+  const source = installPageHooksSource(bindingName);
+  await page.exposeFunction(bindingName, onPageEvent);
+  await page.addInitScript({ content: source });
   // addInitScript only fires on the next navigation, so hook the live document.
   await page.addStyleTag({ content: CURSOR_HIDE_CSS });
-  await page.evaluate(INSTALL_PAGE_HOOKS_SOURCE);
+  await page.evaluate(source);
 }
 
 async function attachPageTake(
@@ -770,7 +795,7 @@ async function attachPageTake(
     if (args.url) {
       await page.goto(args.url, { waitUntil: "domcontentloaded" });
     }
-    await bindAttachedHooks(page);
+    await bindAttachedHooks(page, eventBindingName(takeId));
 
     cdpSession = await context.newCDPSession(page);
     const cast = await startScreencastPipe(cdpSession, dir, fps);

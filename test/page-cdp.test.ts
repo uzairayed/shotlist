@@ -171,4 +171,38 @@ describe("page take attached over cdp_url", { timeout: 60_000 }, () => {
       await server.close();
     }
   });
+
+  it("records a click on a second attach to the same still-alive page", async () => {
+    const server = await serveStaticFile(FIXTURE);
+    try {
+      const port = await freePort();
+      userBrowser = await chromium.launch({
+        args: [`--remote-debugging-port=${port}`, "--disable-dev-shm-usage"],
+      });
+      const userPage = await userBrowser.newPage();
+      await userPage.goto(server.url, { waitUntil: "domcontentloaded" });
+      const cdpUrl = `http://127.0.0.1:${port}`;
+
+      await startTake({ cdp_url: cdpUrl }, dir);
+      await takeClick({ selector: "#cta" }, dir);
+      await stopTake(dir);
+
+      expect(userPage.isClosed()).toBe(false);
+      expect(await userPage.evaluate(() => 1)).toBe(1);
+
+      const second = await startTake({ cdp_url: cdpUrl }, dir);
+      await takeClick({ selector: "#cta" }, dir);
+      const result = await stopTake(dir);
+
+      expect(result.take_id).toBe(second.take_id);
+      const events = loadEvents(result.take_id, dir);
+      expect(
+        events.some((e) => e.type === "click" && e.selector === "#cta"),
+      ).toBe(true);
+      expect(userBrowser.isConnected()).toBe(true);
+      expect(userPage.isClosed()).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
 });
