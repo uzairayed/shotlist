@@ -98,11 +98,22 @@ describe("page take attached over cdp_url", { timeout: 60_000 }, () => {
       expect(
         events.some((e) => e.type === "click" && e.selector === "#cta"),
       ).toBe(true);
-      expect(
-        await userPage.evaluate(
-          () => getComputedStyle(document.body).cursor,
-        ),
-      ).toBe("none");
+      const afterStop = await userPage.evaluate(() => ({
+        cursor: getComputedStyle(document.body).cursor,
+        bound: (window as unknown as { __shotlistBound?: string }).__shotlistBound,
+        hideStyle: !!document.querySelector("[data-shotlist-cursor-hide]"),
+      }));
+      expect(afterStop.cursor).not.toBe("none");
+      expect(afterStop.bound).toBeFalsy();
+      expect(afterStop.hideStyle).toBe(false);
+
+      await userPage.reload({ waitUntil: "domcontentloaded" });
+      const afterReload = await userPage.evaluate(() => ({
+        cursor: getComputedStyle(document.body).cursor,
+        hideStyle: !!document.querySelector("[data-shotlist-cursor-hide]"),
+      }));
+      expect(afterReload.cursor).not.toBe("none");
+      expect(afterReload.hideStyle).toBe(false);
     } finally {
       await server.close();
     }

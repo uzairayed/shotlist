@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { ToolError } from "./errors.js";
 
 export const BOX_SAMPLE_INTERVAL_MS = 500;
 
@@ -62,6 +63,24 @@ export function preferredSelector(bits: SelectorBits): string {
     return `${bits.parentSelector} > ${selector}`;
   }
   return selector;
+}
+
+export const SCREENCAST_CATCHUP_MAX_SECONDS = 5;
+
+export function planScreencastCatchUp(
+  framesWritten: number,
+  upTo: number,
+  fps: number,
+): number {
+  if (upTo <= framesWritten) return framesWritten;
+  const cap = fps * SCREENCAST_CATCHUP_MAX_SECONDS;
+  if (upTo - framesWritten > cap) {
+    throw new ToolError(
+      "CAPTURE_FAILED",
+      `screencast fell behind by ${upTo - framesWritten} frames (cap ${cap})`,
+    );
+  }
+  return upTo;
 }
 
 export function appendJsonl(filePath: string, obj: unknown): void {

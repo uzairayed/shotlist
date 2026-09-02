@@ -6,12 +6,20 @@ import { listElements } from "../src/boxes.js";
 import { startTake, stopTake } from "../src/capture.js";
 import { loadEvents } from "../src/events.js";
 import { takeClick, takeType } from "../src/page-drive.js";
-import { resetCaptureForTests } from "../src/page-session.js";
+import {
+  requirePageRecording,
+  resetCaptureForTests,
+} from "../src/page-session.js";
 import { makeTempProject, rmTempProject, serveStaticFile } from "./helpers.js";
 
 const FIXTURE = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures/live-app.html",
+);
+
+const TWO_BUTTONS = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures/two-buttons.html",
 );
 
 describe("page drive tools", { timeout: 60_000 }, () => {
@@ -106,6 +114,59 @@ describe("page drive tools", { timeout: 60_000 }, () => {
       const result = await stopTake(dir);
       const events = loadEvents(result.take_id, dir);
       expect(events.some((e) => e.type === "keydown")).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("take_click of an id-less button uses a unique parent selector", async () => {
+    const server = await serveStaticFile(TWO_BUTTONS);
+    try {
+      await startTake({ url: server.url }, dir);
+      const rec = requirePageRecording();
+      const snapshots = fs
+        .readFileSync(rec.boxesPath, "utf8")
+        .split("\n")
+        .filter((line) => line.trim())
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              elements: { selector: string; name?: string }[];
+            },
+        );
+      const elements = snapshots[0]?.elements ?? [];
+      const alpha = elements.find(
+        (e) => e.name === "Alpha" && e.selector.includes("button"),
+      );
+      const beta = elements.find(
+        (e) => e.name === "Beta" && e.selector.includes("button"),
+      );
+      expect(alpha?.selector).toBe("#panel-a > button:nth-of-type(1)");
+      expect(beta?.selector).toBe("#panel-b > button:nth-of-type(1)");
+      expect(elements.some((e) => e.selector === "#cta")).toBe(true);
+
+      await takeClick({ selector: alpha!.selector }, dir);
+      const hit = await rec.page.evaluate(() => ({
+        alpha: document
+          .querySelector("#panel-a button")
+          ?.getAttribute("data-hit"),
+        beta: document
+          .querySelector("#panel-b button")
+          ?.getAttribute("data-hit"),
+      }));
+      expect(hit.alpha).toBe("alpha");
+      expect(hit.beta).toBeNull();
+
+      const result = await stopTake(dir);
+      const listed = listElements(result.take_id, result.duration, "Alpha", dir);
+      expect(listed.elements.some((e) => e.selector === alpha!.selector)).toBe(
+        true,
+      );
+      expect(
+        listElements(result.take_id, result.duration, null, dir).elements.some(
+          (e) => e.selector === "#cta",
+        ),
+      ).toBe(true);
     } finally {
       await server.close();
     }

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -16,6 +16,7 @@ import {
   appendJsonl,
   BOX_SAMPLE_INTERVAL_MS,
   cssPixelsToSource,
+  planScreencastCatchUp,
   preferredSelector,
   shouldSampleBoxes,
   sourcePoint,
@@ -28,7 +29,6 @@ import { ingestTake, newTakeId, takeDir, type IngestResult } from "./takes.js";
 export const POINTER_MOVE_THROTTLE_MS = 50;
 
 const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
-const CURSOR_HIDE_CSS = "* { cursor: none !important; }";
 const FIRST_SCREENCAST_FRAME_TIMEOUT_MS = 10_000;
 
 export interface PageTakeArgs {
@@ -59,6 +59,7 @@ export interface PageRecording {
   lastPointerMoveAt: number | null;
   /** False when we attached over CDP: never close or kill that browser. */
   launchedByUs: boolean;
+  bindingName?: string;
   cdpSession?: CDPSession;
   screencast?: ScreencastPipe;
   navHandler?: (frame: Frame) => void;
@@ -69,6 +70,7 @@ interface RawCollected {
   dataShotlist?: string;
   tag: string;
   nthOfType: number;
+  parentSelector?: string;
   role?: string;
   name?: string;
   rect: { x: number; y: number; w: number; h: number };
@@ -122,6 +124,27 @@ function collectElementsInPage(): RawCollected[] {
       if (sib.tagName === el.tagName) nthOfType += 1;
       sib = sib.previousElementSibling;
     }
+    const parentParts: string[] = [];
+    let parent = el.parentElement;
+    while (parent) {
+      const parentTag = parent.tagName.toLowerCase();
+      if (parentTag === "html" || parentTag === "body") break;
+      const parentId = parent.getAttribute("id");
+      if (parentId) {
+        parentParts.unshift(`#${parentId}`);
+        break;
+      }
+      let parentNth = 1;
+      let parentSib = parent.previousElementSibling;
+      while (parentSib) {
+        if (parentSib.tagName === parent.tagName) parentNth += 1;
+        parentSib = parentSib.previousElementSibling;
+      }
+      parentParts.unshift(`${parentTag}:nth-of-type(${parentNth})`);
+      parent = parent.parentElement;
+    }
+    const parentSelector =
+      parentParts.length > 0 ? parentParts.join(" > ") : undefined;
     const id = el.getAttribute("id") ?? undefined;
     const dataShotlist = el.getAttribute("data-shotlist") ?? undefined;
     const roleAttr = el.getAttribute("role");
@@ -152,6 +175,7 @@ function collectElementsInPage(): RawCollected[] {
       dataShotlist,
       tag,
       nthOfType,
+      parentSelector,
       role,
       name,
       rect: { x: r.x, y: r.y, w: r.width, h: r.height },
@@ -166,10 +190,15 @@ function collectElementsInPage(): RawCollected[] {
 // re-hooks instead of keeping the previous take's dead function.
 export function installPageHooksSource(
   bindingName = "shotlistPushEvent",
+  onlyIfBound = false,
 ): string {
   const nameLit = JSON.stringify(bindingName);
   return `(() => {
   const bindingName = ${nameLit};
+  const onlyIfBound = ${onlyIfBound ? "true" : "false"};
+  const w = window;
+  if (w.__shotlistBound === "released") return;
+  if (onlyIfBound && !w.__shotlistBound) return;
   const injectCursorHide = () => {
     if (document.querySelector("[data-shotlist-cursor-hide]")) return;
     const style = document.createElement("style");
@@ -183,7 +212,6 @@ export function installPageHooksSource(
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", injectCursorHide);
   }
-  const w = window;
   if (w.__shotlistBound === bindingName) return;
   w.__shotlistBound = bindingName;
   const selectorBits = (el) => {
@@ -202,6 +230,26 @@ export function installPageHooksSource(
     if (id) bits.id = id;
     const dataShotlist = el.getAttribute("data-shotlist");
     if (dataShotlist !== null) bits.dataShotlist = dataShotlist;
+    const parentParts = [];
+    let parent = el.parentElement;
+    while (parent) {
+      const parentTag = parent.tagName.toLowerCase();
+      if (parentTag === "html" || parentTag === "body") break;
+      const parentId = parent.getAttribute("id");
+      if (parentId) {
+        parentParts.unshift("#" + parentId);
+        break;
+      }
+      let parentNth = 1;
+      let parentSib = parent.previousElementSibling;
+      while (parentSib) {
+        if (parentSib.tagName === parent.tagName) parentNth += 1;
+        parentSib = parentSib.previousElementSibling;
+      }
+      parentParts.unshift(parentTag + ":nth-of-type(" + parentNth + ")");
+      parent = parent.parentElement;
+    }
+    if (parentParts.length) bits.parentSelector = parentParts.join(" > ");
     return bits;
   };
   const push = (ev) => {
@@ -267,6 +315,38 @@ export function installPageHooksSource(
 
 export const INSTALL_PAGE_HOOKS_SOURCE = installPageHooksSource();
 
+async function hidePageCursor(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    if (document.querySelector("[data-shotlist-cursor-hide]")) return;
+    const style = document.createElement("style");
+    style.setAttribute("data-shotlist-cursor-hide", "");
+    style.textContent = "* { cursor: none !important; }";
+    const parent = document.head || document.documentElement;
+    if (parent) parent.appendChild(style);
+  });
+}
+
+async function teardownAttachedHooks(
+  page: Page,
+  bindingName: string,
+): Promise<void> {
+  await page.evaluate((name) => {
+    document.querySelectorAll("[data-shotlist-cursor-hide]").forEach((el) => {
+      el.remove();
+    });
+    const w = window as unknown as {
+      __shotlistBound?: string;
+      [key: string]: unknown;
+    };
+    try {
+      delete w.__shotlistBound;
+    } catch {
+      w.__shotlistBound = undefined;
+    }
+    w[name] = () => undefined;
+  }, bindingName);
+}
+
 async function onPageEvent(ev: PagePushEvent): Promise<void> {
   const rec = current;
   if (!rec) return;
@@ -329,6 +409,7 @@ export async function sampleBoxes(reason: SampleReason): Promise<void> {
         dataShotlist: el.dataShotlist,
         tag: el.tag,
         nthOfType: el.nthOfType,
+        parentSelector: el.parentSelector,
       }),
       role: el.role,
       name: el.name,
@@ -385,6 +466,7 @@ async function releaseRecording(rec: {
   context?: BrowserContext;
   browser?: Browser;
   launchedByUs?: boolean;
+  bindingName?: string;
   cdpSession?: CDPSession;
   screencast?: ScreencastPipe;
   navHandler?: (frame: Frame) => void;
@@ -404,6 +486,13 @@ async function releaseRecording(rec: {
     }
   }
   if (rec.launchedByUs === false) {
+    if (rec.page && rec.bindingName) {
+      try {
+        await teardownAttachedHooks(rec.page, rec.bindingName);
+      } catch {
+        /* page already gone */
+      }
+    }
     if (rec.page && rec.navHandler) {
       try {
         rec.page.off("framenavigated", rec.navHandler);
@@ -580,18 +669,25 @@ async function startScreencastPipe(
   const startedAtMs = Date.now();
   let framesWritten = 0;
   let stopped = false;
+  let pumpError: ToolError | null = null;
   const writeFrames = (upTo: number): void => {
-    if (!lastFrame || !proc.stdin?.writable) return;
-    const capped = Math.min(upTo, framesWritten + fps * 5);
-    while (framesWritten < capped) {
+    if (!lastFrame || !proc.stdin?.writable || pumpError) return;
+    const target = planScreencastCatchUp(framesWritten, upTo, fps);
+    while (framesWritten < target) {
       proc.stdin.write(lastFrame);
       framesWritten += 1;
     }
-    framesWritten = Math.max(framesWritten, upTo);
   };
   const pump = () => {
-    if (stopped) return;
-    writeFrames(Math.floor(((Date.now() - startedAtMs) / 1000) * fps));
+    if (stopped || pumpError) return;
+    try {
+      writeFrames(Math.floor(((Date.now() - startedAtMs) / 1000) * fps));
+    } catch (err) {
+      pumpError =
+        err instanceof ToolError
+          ? err
+          : new ToolError("CAPTURE_FAILED", String(err));
+    }
   };
   const pumpTimer = setInterval(pump, Math.max(10, Math.round(1000 / fps)));
 
@@ -601,22 +697,26 @@ async function startScreencastPipe(
     if (stopping) return stopping;
     stopping = (async () => {
       clearInterval(pumpTimer);
-      writeFrames(
-        Math.max(
-          2,
-          Math.ceil(((Date.now() - startedAtMs) / 1000) * fps),
-          framesWritten + 1,
-        ),
-      );
       stopped = true;
-      client.off("Page.screencastFrame", onFrame);
-      await client.send("Page.stopScreencast").catch(() => {
-        /* page or session already gone */
-      });
+      try {
+        if (pumpError) throw pumpError;
+        writeFrames(
+          Math.max(
+            2,
+            Math.ceil(((Date.now() - startedAtMs) / 1000) * fps),
+            framesWritten + 1,
+          ),
+        );
+      } finally {
+        client.off("Page.screencastFrame", onFrame);
+        await client.send("Page.stopScreencast").catch(() => {
+          /* page or session already gone */
+        });
+        proc.stdin?.end();
+      }
       const exitCode = await new Promise<number | null>((resolve) => {
         proc.once("error", () => resolve(null));
         proc.once("close", (code) => resolve(code));
-        proc.stdin?.end();
       });
       return { exitCode, stderr };
     })();
@@ -630,7 +730,7 @@ function onFrameNavigated(frame: Frame): void {
   const rec = current;
   if (!rec) return;
   if (frame !== rec.page.mainFrame()) return;
-  void rec.page.addStyleTag({ content: CURSOR_HIDE_CSS }).catch(() => {
+  void hidePageCursor(rec.page).catch(() => {
     /* page may be closing */
   });
   if (!acceptNavEvents) return;
@@ -682,11 +782,11 @@ export async function startPageTake(
     });
     await context.addInitScript({ content: INSTALL_PAGE_HOOKS_SOURCE });
     page = await context.newPage();
-    await page.addStyleTag({ content: CURSOR_HIDE_CSS });
+    const startedAtMs = Date.now();
+    await hidePageCursor(page);
     await page.exposeFunction("shotlistPushEvent", onPageEvent);
     await page.addInitScript({ content: INSTALL_PAGE_HOOKS_SOURCE });
 
-    const startedAtMs = Date.now();
     current = {
       takeId,
       dir,
@@ -701,13 +801,14 @@ export async function startPageTake(
       lastBoxSampleT: null,
       lastPointerMoveAt: null,
       launchedByUs: true,
+      bindingName: "shotlistPushEvent",
       navHandler: onFrameNavigated,
     };
     acceptNavEvents = false;
     page.on("framenavigated", onFrameNavigated);
 
     await page.goto(args.url, { waitUntil: "domcontentloaded" });
-    await page.addStyleTag({ content: CURSOR_HIDE_CSS });
+    await hidePageCursor(page);
     appendJsonl(current.eventsPath, {
       t: nowT(current),
       type: "nav",
@@ -757,12 +858,12 @@ function eventBindingName(takeId: string): string {
 }
 
 async function bindAttachedHooks(page: Page, bindingName: string): Promise<void> {
-  const source = installPageHooksSource(bindingName);
+  const liveSource = installPageHooksSource(bindingName);
+  const initSource = installPageHooksSource(bindingName, true);
   await page.exposeFunction(bindingName, onPageEvent);
-  await page.addInitScript({ content: source });
+  await page.addInitScript({ content: initSource });
   // addInitScript only fires on the next navigation, so hook the live document.
-  await page.addStyleTag({ content: CURSOR_HIDE_CSS });
-  await page.evaluate(source);
+  await page.evaluate(liveSource);
 }
 
 async function attachPageTake(
@@ -775,6 +876,7 @@ async function attachPageTake(
   let page: Page | undefined;
   let cdpSession: CDPSession | undefined;
   let screencast: ScreencastPipe | undefined;
+  let bindingName: string | undefined;
   try {
     const takeId = newTakeId();
     const dir = takeDir(takeId, root);
@@ -795,7 +897,8 @@ async function attachPageTake(
     if (args.url) {
       await page.goto(args.url, { waitUntil: "domcontentloaded" });
     }
-    await bindAttachedHooks(page, eventBindingName(takeId));
+    bindingName = eventBindingName(takeId);
+    await bindAttachedHooks(page, bindingName);
 
     cdpSession = await context.newCDPSession(page);
     const cast = await startScreencastPipe(cdpSession, dir, fps);
@@ -819,6 +922,7 @@ async function attachPageTake(
       lastBoxSampleT: null,
       lastPointerMoveAt: null,
       launchedByUs: false,
+      bindingName,
       cdpSession,
       screencast,
       navHandler: onFrameNavigated,
@@ -848,6 +952,7 @@ async function attachPageTake(
     await releaseRecording({
       page,
       launchedByUs: false,
+      bindingName,
       cdpSession,
       screencast,
       navHandler: onFrameNavigated,

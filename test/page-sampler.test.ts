@@ -2,9 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { ToolError } from "../src/errors.js";
 import {
   appendJsonl,
   cssPixelsToSource,
+  planScreencastCatchUp,
   preferredSelector,
   shouldSampleBoxes,
   sourcePoint,
@@ -69,6 +71,22 @@ describe("page-sampler", () => {
         nthOfType: 1,
       }),
     ).toBe("span:nth-of-type(1)");
+  });
+
+  it("planScreencastCatchUp writes the requested frames when within the cap", () => {
+    expect(planScreencastCatchUp(10, 20, 30)).toBe(20);
+    expect(planScreencastCatchUp(10, 10, 30)).toBe(10);
+    expect(planScreencastCatchUp(0, 150, 30)).toBe(150);
+  });
+
+  it("planScreencastCatchUp throws CAPTURE_FAILED instead of skipping frames", () => {
+    expect(() => planScreencastCatchUp(0, 151, 30)).toThrow(ToolError);
+    try {
+      planScreencastCatchUp(10, 10 + 30 * 5 + 1, 30);
+      expect.unreachable("should throw");
+    } catch (err) {
+      expect(err).toMatchObject({ code: "CAPTURE_FAILED" });
+    }
   });
 
   it("appendJsonl writes two JSON objects as two newline-terminated lines", () => {
