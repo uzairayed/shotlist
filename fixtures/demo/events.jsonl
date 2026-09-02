@@ -1,0 +1,4 @@
+{"t":2,"type":"pointer_move","x":400,"y":220}
+{"t":2,"type":"click","x":400,"y":220,"selector":"#email"}
+{"t":5,"type":"pointer_move","x":400,"y":500}
+{"t":5,"type":"click","x":400,"y":500,"selector":"#signup"}
