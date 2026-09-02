@@ -8,12 +8,14 @@ Contract: [GitHub issue #1](https://github.com/uzairayed/shotlist/issues/1).
 
 - Node.js 20+
 - [ffmpeg](https://ffmpeg.org/) on `PATH` (or set `FFMPEG_PATH`)
-- Linux for `start_take` / `stop_take` (x11grab). Other OSes: use `ingest_take`.
+- Playwright Chromium: run `npx playwright install chromium` after `npm install`
+- Linux x11grab (`mode: "x11"`) is an optional fallback only
 
 ## Install
 
 ```bash
 npm install
+npx playwright install chromium
 npm run build
 npm test
 ```
@@ -36,17 +38,18 @@ The CLI entry is `shotlist-mcp` (after build: `node dist/bin.js`, or `npx tsx sr
 
 1. Analyze the live app (no MCP video tools yet).
 2. `set_plan` / `get_plan` with beats.
-3. Capture or `ingest_take` only those beats (full resolution, no live zoom).
+3. `start_take({ url })`, drive beats with `take_click` / `take_type` / `take_goto`, then `stop_take` (full resolution, no live zoom). Or `ingest_take` for an existing mp4.
 4. `get_take` + `preview_frame` (wide via `source_t`) to inspect tape.
 5. `list_elements` at click times.
-6. `set_shotlist` with 3–8 shots tagged with `beat`.
+6. `set_shotlist` with 3–8 shots tagged with `beat` and `camera.to.target` where needed.
 7. `preview_frame` on each landing; `update_shot` padding/zoom as needed.
 8. `render`.
 
 ## Ingest vs capture
 
-- **ingest_take**: v1-blocking. Point at a local mp4 (+ optional events/boxes jsonl).
-- **start_take / stop_take**: Linux x11grab only. Elsewhere returns `NOT_IMPLEMENTED` and tells you to use `ingest_take`. Never fakes a take.
+- **ingest_take**: point at a local mp4 (+ optional events/boxes jsonl). Use for existing footage.
+- **start_take / stop_take**: default page-aware capture with Playwright Chromium (`url` or `cdp_url`). Writes video, `events.jsonl`, and `boxes.jsonl`. Drive the page during recording with `take_goto`, `take_click`, and `take_type`.
+- **x11 fallback**: `start_take({ mode: "x11" })` on Linux uses ffmpeg x11grab with empty jsonl. Not the real product path.
 
 ## Cursor double-draw
 
@@ -62,4 +65,4 @@ On ingested screengrabs that already include an OS cursor, the authored overlay 
 
 ## Tools
 
-`set_plan`, `get_plan`, `ingest_take`, `start_take`, `stop_take`, `list_takes`, `get_take`, `list_elements`, `get_shotlist`, `set_shotlist`, `add_shot`, `update_shot`, `add_callout`, `preview_frame` (returns PNG path **and** an image content block), `preview_clip`, `render`.
+`set_plan`, `get_plan`, `ingest_take`, `start_take`, `stop_take`, `take_goto`, `take_click`, `take_type`, `list_takes`, `get_take`, `list_elements`, `get_shotlist`, `set_shotlist`, `add_shot`, `update_shot`, `add_callout`, `preview_frame` (returns PNG path **and** an image content block), `preview_clip`, `render`.

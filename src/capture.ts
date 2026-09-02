@@ -143,7 +143,7 @@ export async function stopTake(root?: string) {
 export function registerCaptureTools(server: McpServer): void {
   server.tool(
     "start_take",
-    "Start a page-aware take (Playwright) of url or cdp_url.",
+    "Start page-aware Playwright capture of url or cdp_url; writes video, events.jsonl, and boxes.jsonl.",
     {
       fps: z.number().optional(),
       region: z
@@ -177,7 +177,7 @@ export function registerCaptureTools(server: McpServer): void {
 
   server.tool(
     "stop_take",
-    "Finalize the current recording like ingest_take and return take metadata.",
+    "Stop the in-progress page take, transcode like ingest_take, and return take metadata.",
     {},
     async () => {
       try {
@@ -207,7 +207,7 @@ export function registerCaptureTools(server: McpServer): void {
 
   server.tool(
     "take_goto",
-    "Navigate the in-progress page take.",
+    "Navigate the page during an in-progress page-aware take.",
     { url: z.string() },
     async (args) => {
       try {
@@ -220,7 +220,7 @@ export function registerCaptureTools(server: McpServer): void {
 
   server.tool(
     "take_click",
-    "Click a selector during the in-progress page take; records pointer events.",
+    "Click a selector during an in-progress page-aware take; records pointer events.",
     { selector: z.string() },
     async (args) => {
       try {
@@ -233,7 +233,7 @@ export function registerCaptureTools(server: McpServer): void {
 
   server.tool(
     "take_type",
-    "Type into a selector during the in-progress page take.",
+    "Type into a selector during an in-progress page-aware take.",
     {
       selector: z.string(),
       text: z.string(),

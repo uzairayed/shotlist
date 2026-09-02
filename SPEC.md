@@ -628,21 +628,31 @@ Validate: `version === 1`, `product` and `url` non-empty, `beats` is a non-empty
 
 ```json
 {
+  "url": "https://example.com",
+  "cdp_url": "http://localhost:9222",
+  "viewport": { "width": 1440, "height": 900 },
   "fps": 30,
-  "region": { "x": 0, "y": 0, "w": 1440, "h": 900 },
-  "display": ":0"
+  "dpr": 1,
+  "mode": "page"
 }
 ```
 
-Linux: ffmpeg `x11grab` (or equivalent) of `region` on `display`, hide OS cursor if the grabber supports it (`-draw_mouse 0`). Write events/boxes empty unless you also hook input.
+Default `mode` is `"page"`. Page capture (Playwright Chromium):
 
-If you cannot capture on this machine: return `NOT_IMPLEMENTED` with a message to use `ingest_take`. Do not fake a take.
+- `url`: launch Chromium, open the page, record with `recordVideo`, sample DOM events and boxes.
+- `cdp_url`: attach over CDP, screencast into ffmpeg, sample the same way.
+- `viewport`: CSS viewport (default 1440×900).
+- `dpr`: device pixel ratio for coordinate conversion (default 1).
+
+Writes `events.jsonl` and `boxes.jsonl` during recording (§10–11). Hide the OS cursor in source via injected CSS. Drive the page during recording with `take_goto`, `take_click`, and `take_type`.
+
+Optional `mode: "x11"` (Linux only): ffmpeg `x11grab` of `region` on `display` (`-draw_mouse 0`). Events/boxes remain empty unless you hook input separately. Fallback only, not the default path.
 
 Return `{ ok, take_id, status: "recording" }`.
 
 ### 14.3 `stop_take`
 
-No args. Finalize current recording, transcode like ingest, write `meta.json`. Return the same object as `ingest_take`. Error `BAD_INPUT` if nothing is recording.
+No args. Finalize the current page or x11 recording, transcode like ingest, write `meta.json`. Return the same object as `ingest_take`. Error `BAD_INPUT` if nothing is recording.
 
 ### 14.4 `list_takes`
 
@@ -797,7 +807,7 @@ List these tools in `tools/list` with the argument shapes above (JSON Schema). D
 
 0. **Analyze** the live app. No MCP video tools yet. Fill pages / magic / skip.
 1. `set_plan` with beats (§1B template, URLs from analyze). `get_plan` to confirm.
-2. Capture or `ingest_take` **only those beats**.
+2. `start_take({ url })` for planned beats (or `ingest_take` for an existing mp4). Drive with `take_click` / `take_type` / `take_goto`, then `stop_take`.
 3. `get_take` + `preview_frame` with `source_t` (wide) to see the tape.
 4. `list_elements` at click times.
 5. `set_shotlist` with 3–8 shots, each tagged with `beat`. setup (wide) → ease into control → click → freeze on result → cut.
