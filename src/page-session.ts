@@ -1,8 +1,17 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type CDPSession,
+  type Frame,
+  type Page,
+} from "playwright";
 import { busy } from "./busy.js";
 import { ToolError } from "./errors.js";
+import { requireFfmpeg } from "./ffmpeg.js";
 import {
   appendJsonl,
   BOX_SAMPLE_INTERVAL_MS,
@@ -20,6 +29,7 @@ export const POINTER_MOVE_THROTTLE_MS = 50;
 
 const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
 const CURSOR_HIDE_CSS = "* { cursor: none !important; }";
+const FIRST_SCREENCAST_FRAME_TIMEOUT_MS = 10_000;
 
 export interface PageTakeArgs {
   url?: string;
@@ -27,6 +37,11 @@ export interface PageTakeArgs {
   viewport?: { width: number; height: number };
   fps?: number;
   dpr?: number;
+}
+
+export interface ScreencastPipe {
+  outPath: string;
+  stop(): Promise<{ exitCode: number | null; stderr: string }>;
 }
 
 export interface PageRecording {
@@ -42,6 +57,11 @@ export interface PageRecording {
   boxesPath: string;
   lastBoxSampleT: number | null;
   lastPointerMoveAt: number | null;
+  /** False when we attached over CDP: never close or kill that browser. */
+  launchedByUs: boolean;
+  cdpSession?: CDPSession;
+  screencast?: ScreencastPipe;
+  navHandler?: (frame: Frame) => void;
 }
 
 interface RawCollected {
@@ -142,7 +162,7 @@ function collectElementsInPage(): RawCollected[] {
 
 // String source so Playwright addInitScript does not stringify a compiled
 // function that closes over esbuild's __name helper (missing in the page).
-const INSTALL_PAGE_HOOKS_SOURCE = `(() => {
+export const INSTALL_PAGE_HOOKS_SOURCE = `(() => {
   const injectCursorHide = () => {
     if (document.querySelector("[data-shotlist-cursor-hide]")) return;
     const style = document.createElement("style");
@@ -341,6 +361,46 @@ async function closeBrowserQuietly(rec: {
   }
 }
 
+/**
+ * Release everything we own. An attached browser belongs to the user: we stop
+ * the screencast and drop our references, but never close or kill it.
+ */
+async function releaseRecording(rec: {
+  page?: Page;
+  context?: BrowserContext;
+  browser?: Browser;
+  launchedByUs?: boolean;
+  cdpSession?: CDPSession;
+  screencast?: ScreencastPipe;
+  navHandler?: (frame: Frame) => void;
+}): Promise<void> {
+  if (rec.screencast) {
+    try {
+      await rec.screencast.stop();
+    } catch {
+      /* already stopped */
+    }
+  }
+  if (rec.cdpSession) {
+    try {
+      await rec.cdpSession.detach();
+    } catch {
+      /* session already gone */
+    }
+  }
+  if (rec.launchedByUs === false) {
+    if (rec.page && rec.navHandler) {
+      try {
+        rec.page.off("framenavigated", rec.navHandler);
+      } catch {
+        /* page already gone */
+      }
+    }
+    return;
+  }
+  await closeBrowserQuietly(rec);
+}
+
 export async function resetCaptureForTests(): Promise<void> {
   if (boxTimer) {
     clearInterval(boxTimer);
@@ -350,10 +410,211 @@ export async function resetCaptureForTests(): Promise<void> {
   const rec = current;
   current = null;
   if (rec) {
-    await closeBrowserQuietly(rec);
+    await releaseRecording(rec);
   }
   if (busy.isRecording()) busy.endRecord();
   if (busy.isRendering()) busy.endRender();
+}
+
+/** Width/height from a baseline or progressive JPEG SOF marker. */
+function jpegSize(buf: Buffer): { width: number; height: number } | null {
+  let i = 2;
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) {
+      i += 1;
+      continue;
+    }
+    const marker = buf[i + 1];
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      i += 2;
+      continue;
+    }
+    const isSof =
+      marker >= 0xc0 &&
+      marker <= 0xcf &&
+      marker !== 0xc4 &&
+      marker !== 0xc8 &&
+      marker !== 0xcc;
+    if (isSof) {
+      return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+    }
+    i += 2 + buf.readUInt16BE(i + 2);
+  }
+  return null;
+}
+
+/**
+ * Pipe CDP screencast jpeg frames into ffmpeg. Frames only arrive when the
+ * page repaints, so a pump repeats the newest frame to keep the mp4 timeline
+ * locked to wall clock: video second N is take second N.
+ */
+async function startScreencastPipe(
+  client: CDPSession,
+  dir: string,
+  fps: number,
+): Promise<{
+  pipe: ScreencastPipe;
+  frameWidth: number;
+  frameHeight: number;
+  startedAtMs: number;
+}> {
+  const outPath = path.join(dir, "raw-capture.mp4");
+  let lastFrame: Buffer | null = null;
+  let resolveFirst: ((frame: Buffer) => void) | null = null;
+  const firstFrame = new Promise<Buffer>((resolve) => {
+    resolveFirst = resolve;
+  });
+  const onFrame = (frame: { data: string; sessionId: number }) => {
+    lastFrame = Buffer.from(frame.data, "base64");
+    if (resolveFirst) {
+      const resolve = resolveFirst;
+      resolveFirst = null;
+      resolve(lastFrame);
+    }
+    void client
+      .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+      .catch(() => {
+        /* frame arrived after we stopped */
+      });
+  };
+  client.on("Page.screencastFrame", onFrame);
+  await client.send("Page.enable");
+  await client.send("Page.startScreencast", {
+    format: "jpeg",
+    quality: 80,
+    everyNthFrame: 1,
+  });
+
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  let first: Buffer;
+  try {
+    first = await Promise.race([
+      firstFrame,
+      new Promise<never>((_, reject) => {
+        timeoutTimer = setTimeout(
+          () =>
+            reject(
+              new ToolError(
+                "CAPTURE_FAILED",
+                "attached page sent no screencast frame",
+              ),
+            ),
+          FIRST_SCREENCAST_FRAME_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } catch (err) {
+    client.off("Page.screencastFrame", onFrame);
+    await client.send("Page.stopScreencast").catch(() => {
+      /* never started */
+    });
+    throw err;
+  } finally {
+    clearTimeout(timeoutTimer);
+  }
+
+  const size = jpegSize(first);
+  if (!size) {
+    client.off("Page.screencastFrame", onFrame);
+    await client.send("Page.stopScreencast").catch(() => undefined);
+    throw new ToolError("CAPTURE_FAILED", "screencast frame was not a jpeg");
+  }
+  const frameWidth = size.width - (size.width % 2);
+  const frameHeight = size.height - (size.height % 2);
+
+  const proc = spawn(
+    requireFfmpeg(),
+    [
+      "-y",
+      "-f",
+      "image2pipe",
+      "-vcodec",
+      "mjpeg",
+      "-framerate",
+      String(fps),
+      "-i",
+      "-",
+      "-an",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-preset",
+      "ultrafast",
+      "-vf",
+      `scale=${frameWidth}:${frameHeight}`,
+      outPath,
+    ],
+    { stdio: ["pipe", "ignore", "pipe"] },
+  );
+  let stderr = "";
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString()).slice(-2000);
+  });
+
+  const startedAtMs = Date.now();
+  let framesWritten = 0;
+  let stopped = false;
+  const writeFrames = (upTo: number): void => {
+    if (!lastFrame || !proc.stdin?.writable) return;
+    const capped = Math.min(upTo, framesWritten + fps * 5);
+    while (framesWritten < capped) {
+      proc.stdin.write(lastFrame);
+      framesWritten += 1;
+    }
+    framesWritten = Math.max(framesWritten, upTo);
+  };
+  const pump = () => {
+    if (stopped) return;
+    writeFrames(Math.floor(((Date.now() - startedAtMs) / 1000) * fps));
+  };
+  const pumpTimer = setInterval(pump, Math.max(10, Math.round(1000 / fps)));
+
+  let stopping: Promise<{ exitCode: number | null; stderr: string }> | null =
+    null;
+  const stop = () => {
+    if (stopping) return stopping;
+    stopping = (async () => {
+      clearInterval(pumpTimer);
+      writeFrames(
+        Math.max(
+          2,
+          Math.ceil(((Date.now() - startedAtMs) / 1000) * fps),
+          framesWritten + 1,
+        ),
+      );
+      stopped = true;
+      client.off("Page.screencastFrame", onFrame);
+      await client.send("Page.stopScreencast").catch(() => {
+        /* page or session already gone */
+      });
+      const exitCode = await new Promise<number | null>((resolve) => {
+        proc.once("error", () => resolve(null));
+        proc.once("close", (code) => resolve(code));
+        proc.stdin?.end();
+      });
+      return { exitCode, stderr };
+    })();
+    return stopping;
+  };
+
+  return { pipe: { outPath, stop }, frameWidth, frameHeight, startedAtMs };
+}
+
+function onFrameNavigated(frame: Frame): void {
+  const rec = current;
+  if (!rec) return;
+  if (frame !== rec.page.mainFrame()) return;
+  void rec.page.addStyleTag({ content: CURSOR_HIDE_CSS }).catch(() => {
+    /* page may be closing */
+  });
+  if (!acceptNavEvents) return;
+  appendJsonl(rec.eventsPath, {
+    t: nowT(rec),
+    type: "nav",
+    url: rec.page.url(),
+  });
+  void sampleBoxes("nav");
 }
 
 export async function startPageTake(
@@ -362,10 +623,7 @@ export async function startPageTake(
 ): Promise<{ ok: true; take_id: string; status: "recording" }> {
   ensureProject(root);
   if (args.cdp_url) {
-    throw new ToolError(
-      "NOT_IMPLEMENTED",
-      "cdp_url attach lands in a later task",
-    );
+    return attachPageTake(args, args.cdp_url, root);
   }
   if (!args.url) {
     throw new ToolError(
@@ -417,23 +675,11 @@ export async function startPageTake(
       boxesPath,
       lastBoxSampleT: null,
       lastPointerMoveAt: null,
+      launchedByUs: true,
+      navHandler: onFrameNavigated,
     };
     acceptNavEvents = false;
-    page.on("framenavigated", (frame) => {
-      const rec = current;
-      if (!rec) return;
-      if (frame !== rec.page.mainFrame()) return;
-      void rec.page.addStyleTag({ content: CURSOR_HIDE_CSS }).catch(() => {
-        /* page may be closing */
-      });
-      if (!acceptNavEvents) return;
-      appendJsonl(rec.eventsPath, {
-        t: nowT(rec),
-        type: "nav",
-        url: rec.page.url(),
-      });
-      void sampleBoxes("nav");
-    });
+    page.on("framenavigated", onFrameNavigated);
 
     await page.goto(args.url, { waitUntil: "domcontentloaded" });
     await page.addStyleTag({ content: CURSOR_HIDE_CSS });
@@ -462,6 +708,130 @@ export async function startPageTake(
   }
 }
 
+/** First page of the first context that has one; open one only if url is given. */
+async function pickAttachedPage(
+  browser: Browser,
+  url?: string,
+): Promise<{ page: Page; context: BrowserContext }> {
+  for (const context of browser.contexts()) {
+    const page = context.pages()[0];
+    if (page) return { page, context };
+  }
+  if (!url) {
+    throw new ToolError(
+      "BAD_INPUT",
+      "cdp_url has no open page; pass url to open one",
+    );
+  }
+  const context = browser.contexts()[0] ?? (await browser.newContext());
+  return { page: await context.newPage(), context };
+}
+
+async function bindAttachedHooks(page: Page): Promise<void> {
+  try {
+    await page.exposeFunction("shotlistPushEvent", onPageEvent);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes("already registered")) throw err;
+  }
+  await page.addInitScript({ content: INSTALL_PAGE_HOOKS_SOURCE });
+  // addInitScript only fires on the next navigation, so hook the live document.
+  await page.addStyleTag({ content: CURSOR_HIDE_CSS });
+  await page.evaluate(INSTALL_PAGE_HOOKS_SOURCE);
+}
+
+async function attachPageTake(
+  args: PageTakeArgs,
+  cdpUrl: string,
+  root?: string,
+): Promise<{ ok: true; take_id: string; status: "recording" }> {
+  busy.beginRecord();
+  let browser: Browser | undefined;
+  let page: Page | undefined;
+  let cdpSession: CDPSession | undefined;
+  let screencast: ScreencastPipe | undefined;
+  try {
+    const takeId = newTakeId();
+    const dir = takeDir(takeId, root);
+    fs.mkdirSync(dir, { recursive: true });
+    const eventsPath = path.join(dir, "events.jsonl");
+    const boxesPath = path.join(dir, "boxes.jsonl");
+    fs.writeFileSync(eventsPath, "");
+    fs.writeFileSync(boxesPath, "");
+
+    const fps = args.fps ?? 30;
+    browser = await chromium.connectOverCDP(cdpUrl);
+    const picked = await pickAttachedPage(browser, args.url);
+    page = picked.page;
+    const context = picked.context;
+    await page.bringToFront().catch(() => {
+      /* not all attached targets can be focused */
+    });
+    if (args.url) {
+      await page.goto(args.url, { waitUntil: "domcontentloaded" });
+    }
+    await bindAttachedHooks(page);
+
+    cdpSession = await context.newCDPSession(page);
+    const cast = await startScreencastPipe(cdpSession, dir, fps);
+    screencast = cast.pipe;
+
+    // Keep event x/y and box rects in the pixel space of the recorded mp4.
+    const cssWidth = await page.evaluate(() => window.innerWidth);
+    const dpr = args.dpr ?? (cssWidth > 0 ? cast.frameWidth / cssWidth : 1);
+
+    current = {
+      takeId,
+      dir,
+      page,
+      browser,
+      context,
+      dpr,
+      fps,
+      startedAtMs: cast.startedAtMs,
+      eventsPath,
+      boxesPath,
+      lastBoxSampleT: null,
+      lastPointerMoveAt: null,
+      launchedByUs: false,
+      cdpSession,
+      screencast,
+      navHandler: onFrameNavigated,
+    };
+    acceptNavEvents = false;
+    page.on("framenavigated", onFrameNavigated);
+
+    appendJsonl(eventsPath, {
+      t: nowT(current),
+      type: "nav",
+      url: page.url(),
+    });
+    await sampleBoxes("nav");
+    acceptNavEvents = true;
+    boxTimer = setInterval(() => {
+      void sampleBoxes("interval");
+    }, BOX_SAMPLE_INTERVAL_MS);
+
+    return { ok: true, take_id: takeId, status: "recording" };
+  } catch (err) {
+    if (boxTimer) {
+      clearInterval(boxTimer);
+      boxTimer = null;
+    }
+    current = null;
+    acceptNavEvents = false;
+    await releaseRecording({
+      page,
+      launchedByUs: false,
+      cdpSession,
+      screencast,
+      navHandler: onFrameNavigated,
+    });
+    busy.endRecord();
+    throw err;
+  }
+}
+
 export async function stopPageTake(root?: string): Promise<IngestResult> {
   if (!current) {
     throw new ToolError("BAD_INPUT", "nothing is recording");
@@ -472,12 +842,28 @@ export async function stopPageTake(root?: string): Promise<IngestResult> {
     boxTimer = null;
   }
   acceptNavEvents = false;
-  const video = rec.page.video();
+  const video = rec.launchedByUs ? rec.page.video() : null;
   try {
-    await rec.page.close();
-    await rec.context.close();
-    await rec.browser.close();
-    const videoPath = video ? await video.path() : "";
+    let videoPath = "";
+    if (rec.launchedByUs) {
+      await rec.page.close();
+      await rec.context.close();
+      await rec.browser.close();
+      videoPath = video ? await video.path() : "";
+    } else {
+      const cast = rec.screencast;
+      if (!cast) {
+        throw new ToolError("CAPTURE_FAILED", "attached take has no screencast");
+      }
+      const encode = await cast.stop();
+      if (encode.exitCode !== 0) {
+        throw new ToolError(
+          "CAPTURE_FAILED",
+          `screencast encode failed: ${encode.stderr.slice(-400) || "unknown"}`,
+        );
+      }
+      videoPath = cast.outPath;
+    }
     return ingestTake(
       {
         video_path: videoPath,
@@ -491,6 +877,6 @@ export async function stopPageTake(root?: string): Promise<IngestResult> {
   } finally {
     current = null;
     if (busy.isRecording()) busy.endRecord();
-    await closeBrowserQuietly(rec);
+    await releaseRecording(rec);
   }
 }
