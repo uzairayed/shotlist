@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ToolError } from "../src/errors.js";
 import { busy } from "../src/busy.js";
 import { startTake, stopTake } from "../src/capture.js";
+import { resetCaptureForTests } from "../src/page-session.js";
 import { previewClip } from "../src/render.js";
 import { setShotlist } from "../src/shotlist.js";
 import { ingestTake } from "../src/takes.js";
@@ -20,31 +21,29 @@ describe("capture", () => {
     dir = makeTempProject();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetCaptureForTests();
     rmTempProject(dir);
     delete process.env.SHOTLIST_DIR;
-    // reset busy
-    if (busy.isRecording()) busy.endRecord();
-    if (busy.isRendering()) busy.endRender();
   });
 
-  it("start_take returns NOT_IMPLEMENTED off Linux", () => {
+  it("start_take without url is BAD_INPUT in page mode", async () => {
+    await expect(startTake({}, dir)).rejects.toMatchObject({
+      code: "BAD_INPUT",
+    });
+  });
+
+  it("start_take x11 mode is NOT_IMPLEMENTED off Linux", async () => {
     if (process.platform === "linux") return;
-    try {
-      startTake({}, dir);
-      expect.unreachable();
-    } catch (err) {
-      expect((err as ToolError).code).toBe("NOT_IMPLEMENTED");
-    }
+    await expect(startTake({ mode: "x11" }, dir)).rejects.toMatchObject({
+      code: "NOT_IMPLEMENTED",
+    });
   });
 
   it("stop_take without recording is BAD_INPUT", async () => {
-    try {
-      await stopTake(dir);
-      expect.unreachable();
-    } catch (err) {
-      expect((err as ToolError).code).toBe("BAD_INPUT");
-    }
+    await expect(stopTake(dir)).rejects.toMatchObject({
+      code: "BAD_INPUT",
+    });
   });
 
   it("BUSY when beginning a second render", async () => {
