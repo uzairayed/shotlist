@@ -2,9 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { busy } from "../src/busy.js";
 import { listElements } from "../src/boxes.js";
 import { startTake, stopTake } from "../src/capture.js";
-import { requirePageRecording, resetCaptureForTests } from "../src/page-session.js";
+import {
+  isPageRecording,
+  requirePageRecording,
+  resetCaptureForTests,
+  sampleBoxes,
+  stopPageTake,
+} from "../src/page-session.js";
 import { ingestTake } from "../src/takes.js";
 import {
   generateColorVideo,
@@ -104,6 +111,26 @@ describe("page-aware start_take / stop_take", { timeout: 60_000 }, () => {
     }
   });
 
+  it("keeps CSS cursor hidden after in-take navigation", async () => {
+    const server = await serveStaticFile(FIXTURE);
+    try {
+      await startTake({ url: server.url }, dir);
+      const rec = requirePageRecording();
+      await rec.page.goto(new URL("/next.html", server.url).href, {
+        waitUntil: "domcontentloaded",
+      });
+      await rec.page.waitForFunction(
+        () => getComputedStyle(document.body).cursor === "none",
+      );
+      const cursor = await rec.page.evaluate(
+        () => getComputedStyle(document.body).cursor,
+      );
+      expect(cursor).toBe("none");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("second start_take while recording rejects BUSY", async () => {
     const server = await serveStaticFile(FIXTURE);
     try {
@@ -111,6 +138,39 @@ describe("page-aware start_take / stop_take", { timeout: 60_000 }, () => {
       await expect(startTake({ url: server.url }, dir)).rejects.toMatchObject({
         code: "BUSY",
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("first box sample evaluate failure fails the take", async () => {
+    const server = await serveStaticFile(FIXTURE);
+    try {
+      await startTake({ url: server.url }, dir);
+      const rec = requirePageRecording();
+      rec.lastBoxSampleT = null;
+      rec.page.evaluate = (async () => {
+        throw new Error("collect failed");
+      }) as typeof rec.page.evaluate;
+      await expect(sampleBoxes("nav")).rejects.toMatchObject({
+        code: "CAPTURE_FAILED",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("stopPageTake clears recording when page close throws", async () => {
+    const server = await serveStaticFile(FIXTURE);
+    try {
+      await startTake({ url: server.url }, dir);
+      const rec = requirePageRecording();
+      rec.page.close = async () => {
+        throw new Error("close failed");
+      };
+      await expect(stopPageTake(dir)).rejects.toThrow("close failed");
+      expect(isPageRecording()).toBe(false);
+      expect(busy.isRecording()).toBe(false);
     } finally {
       await server.close();
     }

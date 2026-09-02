@@ -140,7 +140,19 @@ function collectElementsInPage(): RawCollected[] {
   return out;
 }
 
-function installDomListeners(): void {
+function installPageHooks(): void {
+  const injectCursorHide = () => {
+    if (document.querySelector("[data-shotlist-cursor-hide]")) return;
+    const style = document.createElement("style");
+    style.setAttribute("data-shotlist-cursor-hide", "");
+    style.textContent = "* { cursor: none !important; }";
+    (document.head || document.documentElement).appendChild(style);
+  };
+  injectCursorHide();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", injectCursorHide);
+  }
+
   const w = window as unknown as {
     shotlistPushEvent?: (ev: PagePushEvent) => Promise<void>;
     __shotlistBound?: boolean;
@@ -276,6 +288,7 @@ export async function sampleBoxes(reason: SampleReason): Promise<void> {
   if (!rec) return;
   const t = nowT(rec);
   if (!shouldSampleBoxes(rec.lastBoxSampleT, t, reason)) return;
+  const isFirstSample = rec.lastBoxSampleT === null;
   try {
     const raw = await rec.page.evaluate(collectElementsInPage);
     const elements = raw.map((el) => ({
@@ -291,8 +304,14 @@ export async function sampleBoxes(reason: SampleReason): Promise<void> {
     }));
     appendJsonl(rec.boxesPath, { t, elements });
     rec.lastBoxSampleT = t;
-  } catch {
-    /* page may be closing */
+  } catch (err) {
+    if (isFirstSample) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new ToolError(
+        "CAPTURE_FAILED",
+        `failed to sample page boxes: ${message}`,
+      );
+    }
   }
 }
 
@@ -380,10 +399,11 @@ export async function startPageTake(
       deviceScaleFactor: dpr,
       recordVideo: { dir, size: viewport },
     });
+    await context.addInitScript(installPageHooks);
     page = await context.newPage();
     await page.addStyleTag({ content: CURSOR_HIDE_CSS });
     await page.exposeFunction("shotlistPushEvent", onPageEvent);
-    await page.addInitScript(installDomListeners);
+    await page.addInitScript(installPageHooks);
 
     const startedAtMs = Date.now();
     current = {
@@ -403,8 +423,12 @@ export async function startPageTake(
     acceptNavEvents = false;
     page.on("framenavigated", (frame) => {
       const rec = current;
-      if (!rec || !acceptNavEvents) return;
+      if (!rec) return;
       if (frame !== rec.page.mainFrame()) return;
+      void rec.page.addStyleTag({ content: CURSOR_HIDE_CSS }).catch(() => {
+        /* page may be closing */
+      });
+      if (!acceptNavEvents) return;
       appendJsonl(rec.eventsPath, {
         t: nowT(rec),
         type: "nav",
@@ -451,20 +475,24 @@ export async function stopPageTake(root?: string): Promise<IngestResult> {
   }
   acceptNavEvents = false;
   const video = rec.page.video();
-  await rec.page.close();
-  await rec.context.close();
-  await rec.browser.close();
-  current = null;
-  const videoPath = video ? await video.path() : "";
-  busy.endRecord();
-  return ingestTake(
-    {
-      video_path: videoPath,
-      events_path: rec.eventsPath,
-      boxes_path: rec.boxesPath,
-      take_id: rec.takeId,
-      dpr: rec.dpr,
-    },
-    root,
-  );
+  try {
+    await rec.page.close();
+    await rec.context.close();
+    await rec.browser.close();
+    const videoPath = video ? await video.path() : "";
+    return ingestTake(
+      {
+        video_path: videoPath,
+        events_path: rec.eventsPath,
+        boxes_path: rec.boxesPath,
+        take_id: rec.takeId,
+        dpr: rec.dpr,
+      },
+      root,
+    );
+  } finally {
+    current = null;
+    if (busy.isRecording()) busy.endRecord();
+    await closeBrowserQuietly(rec);
+  }
 }
