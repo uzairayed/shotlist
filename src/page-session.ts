@@ -140,27 +140,26 @@ function collectElementsInPage(): RawCollected[] {
   return out;
 }
 
-function installPageHooks(): void {
+// String source so Playwright addInitScript does not stringify a compiled
+// function that closes over esbuild's __name helper (missing in the page).
+const INSTALL_PAGE_HOOKS_SOURCE = `(() => {
   const injectCursorHide = () => {
     if (document.querySelector("[data-shotlist-cursor-hide]")) return;
     const style = document.createElement("style");
     style.setAttribute("data-shotlist-cursor-hide", "");
     style.textContent = "* { cursor: none !important; }";
-    (document.head || document.documentElement).appendChild(style);
+    const parent = document.head || document.documentElement;
+    if (!parent) return;
+    parent.appendChild(style);
   };
   injectCursorHide();
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", injectCursorHide);
   }
-
-  const w = window as unknown as {
-    shotlistPushEvent?: (ev: PagePushEvent) => Promise<void>;
-    __shotlistBound?: boolean;
-  };
+  const w = window;
   if (w.__shotlistBound) return;
   w.__shotlistBound = true;
-
-  function selectorBits(el: EventTarget | null): SelectorBits {
+  const selectorBits = (el) => {
     if (!(el instanceof Element)) {
       return { tag: "div", nthOfType: 1 };
     }
@@ -171,14 +170,13 @@ function installPageHooks(): void {
       if (sib.tagName === el.tagName) nthOfType += 1;
       sib = sib.previousElementSibling;
     }
-    const bits: SelectorBits = { tag, nthOfType };
+    const bits = { tag, nthOfType };
     const id = el.getAttribute("id");
     if (id) bits.id = id;
     const dataShotlist = el.getAttribute("data-shotlist");
     if (dataShotlist !== null) bits.dataShotlist = dataShotlist;
     return bits;
-  }
-
+  };
   document.addEventListener(
     "pointermove",
     (e) => {
@@ -233,7 +231,7 @@ function installPageHooks(): void {
     },
     true,
   );
-}
+})();`;
 
 async function onPageEvent(ev: PagePushEvent): Promise<void> {
   const rec = current;
@@ -399,11 +397,11 @@ export async function startPageTake(
       deviceScaleFactor: dpr,
       recordVideo: { dir, size: viewport },
     });
-    await context.addInitScript(installPageHooks);
+    await context.addInitScript({ content: INSTALL_PAGE_HOOKS_SOURCE });
     page = await context.newPage();
     await page.addStyleTag({ content: CURSOR_HIDE_CSS });
     await page.exposeFunction("shotlistPushEvent", onPageEvent);
-    await page.addInitScript(installPageHooks);
+    await page.addInitScript({ content: INSTALL_PAGE_HOOKS_SOURCE });
 
     const startedAtMs = Date.now();
     current = {

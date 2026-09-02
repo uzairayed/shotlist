@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { ensureProject } from "./project.js";
+import { takeClick, takeGoto, takeType } from "./page-drive.js";
 import {
   isPageRecording,
   startPageTake,
@@ -198,6 +199,49 @@ export function registerCaptureTools(server: McpServer): void {
     async ({ take_id, t, query }) => {
       try {
         return okResult(listElements(take_id, t, query, getShotlistDir()));
+      } catch (err) {
+        return toolErrorResult(err);
+      }
+    },
+  );
+
+  server.tool(
+    "take_goto",
+    "Navigate the in-progress page take.",
+    { url: z.string() },
+    async (args) => {
+      try {
+        return okResult(await takeGoto(args, getShotlistDir()));
+      } catch (err) {
+        return toolErrorResult(err);
+      }
+    },
+  );
+
+  server.tool(
+    "take_click",
+    "Click a selector during the in-progress page take; records pointer events.",
+    { selector: z.string() },
+    async (args) => {
+      try {
+        return okResult(await takeClick(args, getShotlistDir()));
+      } catch (err) {
+        return toolErrorResult(err);
+      }
+    },
+  );
+
+  server.tool(
+    "take_type",
+    "Type into a selector during the in-progress page take.",
+    {
+      selector: z.string(),
+      text: z.string(),
+      delay: z.number().optional(),
+    },
+    async (args) => {
+      try {
+        return okResult(await takeType(args, getShotlistDir()));
       } catch (err) {
         return toolErrorResult(err);
       }
