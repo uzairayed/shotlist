@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -20,6 +21,33 @@ export function writeJson(filePath: string, data: unknown): void {
 
 export function readJson<T>(filePath: string): T {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
+}
+
+export function serveStaticFile(
+  filePath: string,
+): Promise<{ url: string; close: () => Promise<void> }> {
+  const html = fs.readFileSync(filePath);
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+    });
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        reject(new Error("serveStaticFile failed to bind"));
+        return;
+      }
+      resolve({
+        url: `http://127.0.0.1:${addr.port}/`,
+        close: () =>
+          new Promise<void>((res, rej) => {
+            server.close((err) => (err ? rej(err) : res()));
+          }),
+      });
+    });
+  });
 }
 
 /** Generate a solid-color CFR mp4 via ffmpeg. Requires ffmpeg on PATH. */

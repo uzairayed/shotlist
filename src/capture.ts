@@ -11,6 +11,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { ensureProject } from "./project.js";
+import { takeClick, takeGoto, takeType } from "./page-drive.js";
+import {
+  isPageRecording,
+  startPageTake,
+  stopPageTake,
+} from "./page-session.js";
 
 let currentRecording: {
   takeId: string;
@@ -19,7 +25,28 @@ let currentRecording: {
   dir: string;
 } | null = null;
 
-export function startTake(
+export async function startTake(
+  args: {
+    fps?: number;
+    region?: { x: number; y: number; w: number; h: number };
+    display?: string;
+    url?: string;
+    cdp_url?: string;
+    viewport?: { width: number; height: number };
+    dpr?: number;
+    mode?: "page" | "x11";
+  },
+  root?: string,
+): Promise<{ ok: true; take_id: string; status: "recording" }> {
+  ensureProject(root);
+  const mode = args.mode ?? "page";
+  if (mode === "x11") {
+    return startX11Take(args, root);
+  }
+  return startPageTake(args, root);
+}
+
+function startX11Take(
   args: {
     fps?: number;
     region?: { x: number; y: number; w: number; h: number };
@@ -27,7 +54,6 @@ export function startTake(
   },
   root?: string,
 ): { ok: true; take_id: string; status: "recording" } {
-  ensureProject(root);
   if (process.platform !== "linux") {
     throw new ToolError(
       "NOT_IMPLEMENTED",
@@ -80,7 +106,10 @@ export function startTake(
   }
 }
 
-export function stopTake(root?: string) {
+export async function stopTake(root?: string) {
+  if (isPageRecording()) {
+    return stopPageTake(root);
+  }
   if (!currentRecording) {
     throw new ToolError("BAD_INPUT", "nothing is recording");
   }
@@ -114,7 +143,7 @@ export function stopTake(root?: string) {
 export function registerCaptureTools(server: McpServer): void {
   server.tool(
     "start_take",
-    "Start Linux x11grab recording of a screen region; returns take_id and status recording.",
+    "Start page-aware Playwright capture of url or cdp_url; writes video, events.jsonl, and boxes.jsonl.",
     {
       fps: z.number().optional(),
       region: z
@@ -126,10 +155,20 @@ export function registerCaptureTools(server: McpServer): void {
         })
         .optional(),
       display: z.string().optional(),
+      url: z.string().optional(),
+      cdp_url: z.string().optional(),
+      viewport: z
+        .object({
+          width: z.number(),
+          height: z.number(),
+        })
+        .optional(),
+      dpr: z.number().optional(),
+      mode: z.enum(["page", "x11"]).optional(),
     },
     async (args) => {
       try {
-        return okResult(startTake(args, getShotlistDir()));
+        return okResult(await startTake(args, getShotlistDir()));
       } catch (err) {
         return toolErrorResult(err);
       }
@@ -138,7 +177,7 @@ export function registerCaptureTools(server: McpServer): void {
 
   server.tool(
     "stop_take",
-    "Finalize the current recording like ingest_take and return take metadata.",
+    "Stop the in-progress page take, transcode like ingest_take, and return take metadata.",
     {},
     async () => {
       try {
@@ -160,6 +199,49 @@ export function registerCaptureTools(server: McpServer): void {
     async ({ take_id, t, query }) => {
       try {
         return okResult(listElements(take_id, t, query, getShotlistDir()));
+      } catch (err) {
+        return toolErrorResult(err);
+      }
+    },
+  );
+
+  server.tool(
+    "take_goto",
+    "Navigate the page during an in-progress page-aware take.",
+    { url: z.string() },
+    async (args) => {
+      try {
+        return okResult(await takeGoto(args, getShotlistDir()));
+      } catch (err) {
+        return toolErrorResult(err);
+      }
+    },
+  );
+
+  server.tool(
+    "take_click",
+    "Click a selector during an in-progress page-aware take; records pointer events.",
+    { selector: z.string() },
+    async (args) => {
+      try {
+        return okResult(await takeClick(args, getShotlistDir()));
+      } catch (err) {
+        return toolErrorResult(err);
+      }
+    },
+  );
+
+  server.tool(
+    "take_type",
+    "Type into a selector during an in-progress page-aware take.",
+    {
+      selector: z.string(),
+      text: z.string(),
+      delay: z.number().optional(),
+    },
+    async (args) => {
+      try {
+        return okResult(await takeType(args, getShotlistDir()));
       } catch (err) {
         return toolErrorResult(err);
       }

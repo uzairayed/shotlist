@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Demo App</title>
+  </head>
+  <body>
+    <h1 id="title">Demo App</h1>
+    <input id="email" type="email" aria-label="Email" />
+    <button id="cta" type="button">Get started</button>
+    <div id="result" hidden>You're in</div>
+    <a href="/next.html" id="nav-link">Next</a>
+    <script>
+      document.getElementById("cta").addEventListener("click", function () {
+        document.getElementById("result").hidden = false;
+      });
+    </script>
+  </body>
+</html>

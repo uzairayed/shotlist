@@ -69,6 +69,9 @@ function countEvents(
 
 function copyOrEmpty(src: string | null | undefined, dest: string): boolean {
   if (src && fs.existsSync(src)) {
+    if (path.resolve(src) === path.resolve(dest)) {
+      return fs.statSync(dest).size > 0;
+    }
     fs.copyFileSync(src, dest);
     return fs.statSync(dest).size > 0;
   }

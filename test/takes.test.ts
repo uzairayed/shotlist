@@ -63,6 +63,22 @@ describe("ingest_take", () => {
     expect(got.events_summary).toEqual({ clicks: 0, moves: 0, keys: 0 });
   });
 
+  it("ingest_take does not wipe jsonl when events_path is the take dest", () => {
+    const takeId = "take_inplace";
+    const destDir = path.join(dir, "takes", takeId);
+    fs.mkdirSync(destDir, { recursive: true });
+    const eventsPath = path.join(destDir, "events.jsonl");
+    const payload =
+      '{"t":0,"type":"nav","url":"http://127.0.0.1/"}' + "\n";
+    fs.writeFileSync(eventsPath, payload);
+    const result = ingestTake(
+      { video_path: videoPath, events_path: eventsPath, take_id: takeId },
+      dir,
+    );
+    expect(result.has_events).toBe(true);
+    expect(fs.readFileSync(eventsPath, "utf8")).toBe(payload);
+  });
+
   it("returns FFMPEG_MISSING when ffmpeg is absent", () => {
     process.env.FFMPEG_PATH = "/nonexistent/ffmpeg-binary-shotlist";
     // Also hide PATH resolution by pointing PATH to empty
