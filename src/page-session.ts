@@ -57,6 +57,9 @@ export interface PageRecording {
   boxesPath: string;
   lastBoxSampleT: number | null;
   lastPointerMoveAt: number | null;
+  lastPointerCss: { x: number; y: number } | null;
+  /** When true, injected pointer_move listeners are ignored (scripted path). */
+  scriptedPointer: boolean;
   /** False when we attached over CDP: never close or kill that browser. */
   launchedByUs: boolean;
   bindingName?: string;
@@ -101,8 +104,25 @@ export function requirePageRecording(): PageRecording {
   throw new ToolError("BAD_INPUT", "nothing is recording");
 }
 
-function nowT(rec: PageRecording): number {
+export function nowT(rec: PageRecording): number {
   return (Date.now() - rec.startedAtMs) / 1000;
+}
+
+export function writePointerMove(
+  rec: PageRecording,
+  cssX: number,
+  cssY: number,
+  t?: number,
+): void {
+  const pt = sourcePoint(cssX, cssY, rec.dpr);
+  appendJsonl(rec.eventsPath, {
+    t: t ?? nowT(rec),
+    type: "pointer_move",
+    x: pt.x,
+    y: pt.y,
+  });
+  rec.lastPointerCss = { x: cssX, y: cssY };
+  rec.lastPointerMoveAt = Date.now();
 }
 
 function collectElementsInPage(): RawCollected[] {
@@ -352,6 +372,7 @@ async function onPageEvent(ev: PagePushEvent): Promise<void> {
   if (!rec) return;
   const t = nowT(rec);
   if (ev.type === "pointer_move") {
+    if (rec.scriptedPointer) return;
     const now = Date.now();
     if (
       rec.lastPointerMoveAt !== null &&
@@ -360,11 +381,13 @@ async function onPageEvent(ev: PagePushEvent): Promise<void> {
       return;
     }
     rec.lastPointerMoveAt = now;
+    rec.lastPointerCss = { x: ev.x ?? 0, y: ev.y ?? 0 };
     const pt = sourcePoint(ev.x ?? 0, ev.y ?? 0, rec.dpr);
     appendJsonl(rec.eventsPath, { t, type: "pointer_move", x: pt.x, y: pt.y });
     return;
   }
   if (ev.type === "pointer_down" || ev.type === "pointer_up") {
+    rec.lastPointerCss = { x: ev.x ?? 0, y: ev.y ?? 0 };
     const pt = sourcePoint(ev.x ?? 0, ev.y ?? 0, rec.dpr);
     appendJsonl(rec.eventsPath, {
       t,
@@ -376,6 +399,7 @@ async function onPageEvent(ev: PagePushEvent): Promise<void> {
     return;
   }
   if (ev.type === "click") {
+    rec.lastPointerCss = { x: ev.x ?? 0, y: ev.y ?? 0 };
     const pt = sourcePoint(ev.x ?? 0, ev.y ?? 0, rec.dpr);
     const selector = preferredSelector(
       ev.bits ?? { tag: "div", nthOfType: 1 },
@@ -800,6 +824,8 @@ export async function startPageTake(
       boxesPath,
       lastBoxSampleT: null,
       lastPointerMoveAt: null,
+      lastPointerCss: null,
+      scriptedPointer: false,
       launchedByUs: true,
       bindingName: "shotlistPushEvent",
       navHandler: onFrameNavigated,
@@ -921,6 +947,8 @@ async function attachPageTake(
       boxesPath,
       lastBoxSampleT: null,
       lastPointerMoveAt: null,
+      lastPointerCss: null,
+      scriptedPointer: false,
       launchedByUs: false,
       bindingName,
       cdpSession,

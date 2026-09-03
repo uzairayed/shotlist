@@ -42,6 +42,9 @@ export function pointerSamples(events: PointerSample[]): PointerSample[] {
   );
 }
 
+/** Gaps longer than this are a hold: stay on the last sample, do not crawl. */
+export const POINTER_HOLD_GAP_S = 0.2;
+
 /** Piecewise linear interpolation of pointer position at t_src. */
 export function cursorFromEvents(
   events: PointerSample[],
@@ -58,6 +61,9 @@ export function cursorFromEvents(
   const a = samples[i];
   const b = samples[i + 1];
   const span = b.t - a.t;
+  if (span > POINTER_HOLD_GAP_S) {
+    return { x: a.x, y: a.y };
+  }
   const u = span <= 0 ? 1 : (tSrc - a.t) / span;
   return {
     x: a.x + (b.x - a.x) * u,

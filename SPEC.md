@@ -392,7 +392,7 @@ Cursor position is interpolated in **source pixels**, then mapped through the **
 
 ### Event path (when from/to omitted but `events.jsonl` has pointer events)
 
-For each output frame, cursor source pos = interpolate `pointer_move` / `pointer_down` / `click` samples at `t_src` with piecewise linear interpolation. If no sample yet, hide until the first sample.
+For each output frame, cursor source pos = interpolate `pointer_move` / `pointer_down` / `click` samples at `t_src` with piecewise linear interpolation. If the gap between consecutive samples is greater than 200ms, hold the last sample (a pause, not a crawl). If no sample yet, hide until the first sample.
 
 ### Neither
 
@@ -644,7 +644,11 @@ Default `mode` is `"page"`. Page capture (Playwright Chromium):
 - `viewport`: CSS viewport (default 1440×900).
 - `dpr`: device pixel ratio for coordinate conversion (default 1).
 
-Writes `events.jsonl` and `boxes.jsonl` during recording (§10–11). Hide the OS cursor in source via injected CSS. Drive the page during recording with `take_goto`, `take_click`, and `take_type`.
+Writes `events.jsonl` and `boxes.jsonl` during recording (§10–11). Hide the OS cursor in source via injected CSS. Drive the page during recording with `take_goto`, `take_move`, `take_click`, and `take_type`.
+
+`take_move({ to, duration, ease })` writes dense `pointer_move` samples along an eased path. `to` is a selector or `{x,y}` CSS pixels. Default `duration` is `cursor.travel` (0.4s), default `ease` is `ease-out`.
+
+`take_click` travels to the target (same defaults), clicks, then emits rest samples for `dwell_ms` (default 180) so interpolation does not crawl across a hold.
 
 Optional `mode: "x11"` (Linux only): ffmpeg `x11grab` of `region` on `display` (`-draw_mouse 0`). Events/boxes remain empty unless you hook input separately. Fallback only, not the default path.
 
@@ -807,7 +811,7 @@ List these tools in `tools/list` with the argument shapes above (JSON Schema). D
 
 0. **Analyze** the live app. No MCP video tools yet. Fill pages / magic / skip.
 1. `set_plan` with beats (§1B template, URLs from analyze). `get_plan` to confirm.
-2. `start_take({ url })` for planned beats (or `ingest_take` for an existing mp4). Drive with `take_click` / `take_type` / `take_goto`, then `stop_take`.
+2. `start_take({ url })` for planned beats (or `ingest_take` for an existing mp4). Drive with `take_move` / `take_click` / `take_type` / `take_goto`, then `stop_take`.
 3. `get_take` + `preview_frame` with `source_t` (wide) to see the tape.
 4. `list_elements` at click times.
 5. `set_shotlist` with 3–8 shots, each tagged with `beat`. setup (wide) → ease into control → click → freeze on result → cut.
