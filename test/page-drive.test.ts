@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { listElements } from "../src/boxes.js";
 import { startTake, stopTake } from "../src/capture.js";
 import { loadEvents } from "../src/events.js";
-import { takeClick, takeType } from "../src/page-drive.js";
+import { takeClick, takeMove, takeType } from "../src/page-drive.js";
 import {
   requirePageRecording,
   resetCaptureForTests,
@@ -179,6 +179,71 @@ describe("page drive tools", { timeout: 60_000 }, () => {
       await expect(takeClick({ selector: "#missing" }, dir)).rejects.toMatchObject({
         code: "ELEMENT_NOT_FOUND",
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("take_move with no recording rejects BAD_INPUT", async () => {
+    await expect(
+      takeMove({ to: { x: 100, y: 100 } }, dir),
+    ).rejects.toMatchObject({ code: "BAD_INPUT" });
+  });
+
+  it("take_move writes a dense eased pointer_move path", async () => {
+    const server = await serveStaticFile(FIXTURE);
+    try {
+      await startTake({ url: server.url }, dir);
+      await takeMove(
+        { to: { x: 200, y: 160 }, duration: 0.2, ease: "linear" },
+        dir,
+      );
+      const result = await stopTake(dir);
+      const events = loadEvents(result.take_id, dir);
+      const moves = events.filter((e) => e.type === "pointer_move");
+      expect(moves.length).toBeGreaterThanOrEqual(4);
+      const xs = moves.map((e) => e.x);
+      expect(xs[0]).toBeLessThan(xs[xs.length - 1]!);
+      expect(moves.at(-1)!.x).toBeCloseTo(200, 0);
+      expect(moves.at(-1)!.y).toBeCloseTo(160, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("take_click travels then rests so the path does not teleport", async () => {
+    const server = await serveStaticFile(FIXTURE);
+    try {
+      await startTake({ url: server.url }, dir);
+      await takeClick(
+        { selector: "#cta", duration: 0.25, ease: "linear", dwell_ms: 150 },
+        dir,
+      );
+      const result = await stopTake(dir);
+      const events = loadEvents(result.take_id, dir);
+      const clickIdx = events.findIndex(
+        (e) =>
+          e.type === "click" &&
+          typeof e.selector === "string" &&
+          (e.selector === "#cta" || e.selector.endsWith("#cta")),
+      );
+      expect(clickIdx).toBeGreaterThan(0);
+      const beforeClick = events.slice(0, clickIdx).filter((e) => e.type === "pointer_move");
+      expect(beforeClick.length).toBeGreaterThanOrEqual(4);
+      const first = beforeClick[0]!;
+      const last = beforeClick[beforeClick.length - 1]!;
+      const dist = Math.hypot(last.x - first.x, last.y - first.y);
+      expect(dist).toBeGreaterThan(20);
+
+      const click = events[clickIdx]!;
+      const rest = events
+        .slice(clickIdx + 1)
+        .filter((e) => e.type === "pointer_move")
+        .slice(0, 3);
+      expect(rest.length).toBeGreaterThanOrEqual(2);
+      for (const sample of rest) {
+        expect(Math.hypot(sample.x - click.x, sample.y - click.y)).toBeLessThan(3);
+      }
     } finally {
       await server.close();
     }

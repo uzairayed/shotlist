@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { ensureProject } from "./project.js";
-import { takeClick, takeGoto, takeType } from "./page-drive.js";
+import { takeClick, takeGoto, takeMove, takeType } from "./page-drive.js";
 import {
   isPageRecording,
   startPageTake,
@@ -219,9 +219,34 @@ export function registerCaptureTools(server: McpServer): void {
   );
 
   server.tool(
+    "take_move",
+    "Move the pointer along an eased path during an in-progress page-aware take; writes dense pointer_move samples.",
+    {
+      to: z.union([
+        z.string(),
+        z.object({ x: z.number(), y: z.number() }),
+      ]),
+      duration: z.number().optional(),
+      ease: z.string().optional(),
+    },
+    async (args) => {
+      try {
+        return okResult(await takeMove(args, getShotlistDir()));
+      } catch (err) {
+        return toolErrorResult(err);
+      }
+    },
+  );
+
+  server.tool(
     "take_click",
-    "Click a selector during an in-progress page-aware take; records pointer events.",
-    { selector: z.string() },
+    "Travel to a selector, click, then rest so the event path does not teleport or crawl across a hold.",
+    {
+      selector: z.string(),
+      duration: z.number().optional(),
+      ease: z.string().optional(),
+      dwell_ms: z.number().optional(),
+    },
     async (args) => {
       try {
         return okResult(await takeClick(args, getShotlistDir()));

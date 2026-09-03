@@ -84,13 +84,35 @@ describe("events and boxes", () => {
     expect(at6.elements[0].selector).toBe("#signup");
   });
 
-  it("event cursor interpolates and ignores unknown types", () => {
+  it("event cursor interpolates a short span and ignores unknown types", () => {
     const events = loadEvents(takeId, dir);
     expect(events.some((e) => e.type === "unknown_type")).toBe(true);
-    const mid = cursorFromEvents(events, 1.5);
-    expect(mid).not.toBeNull();
-    expect(mid!.x).toBeGreaterThan(100);
-    expect(mid!.x).toBeLessThan(400);
     expect(cursorFromEvents(events, 0.5)).toBeNull();
+  });
+
+  it("event cursor holds across a long gap instead of crawling", () => {
+    const events = loadEvents(takeId, dir);
+    const mid = cursorFromEvents(events, 1.5);
+    expect(mid).toEqual({ x: 100, y: 100 });
+    expect(cursorFromEvents(events, 2.0)).toEqual({ x: 400, y: 220 });
+  });
+});
+
+describe("cursorFromEvents hold gap", () => {
+  it("interpolates across a short pointer span", () => {
+    const events = [
+      { t: 1.0, type: "pointer_move", x: 100, y: 100 },
+      { t: 1.08, type: "pointer_move", x: 180, y: 100 },
+    ];
+    expect(cursorFromEvents(events, 1.04)).toEqual({ x: 140, y: 100 });
+  });
+
+  it("holds the last sample when the next point is more than 200ms later", () => {
+    const events = [
+      { t: 1.0, type: "pointer_move", x: 100, y: 100 },
+      { t: 1.25, type: "click", x: 400, y: 220 },
+    ];
+    expect(cursorFromEvents(events, 1.12)).toEqual({ x: 100, y: 100 });
+    expect(cursorFromEvents(events, 1.25)).toEqual({ x: 400, y: 220 });
   });
 });

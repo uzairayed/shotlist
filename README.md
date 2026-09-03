@@ -38,7 +38,7 @@ The CLI entry is `shotlist-mcp` (after build: `node dist/bin.js`, or `npx tsx sr
 
 1. Analyze the live app (no MCP video tools yet).
 2. `set_plan` / `get_plan` with beats.
-3. `start_take({ url })`, drive beats with `take_click` / `take_type` / `take_goto`, then `stop_take` (full resolution, no live zoom). Or `ingest_take` for an existing mp4.
+3. `start_take({ url })`, drive beats with `take_move` / `take_click` / `take_type` / `take_goto`, then `stop_take` (full resolution, no live zoom). Or `ingest_take` for an existing mp4.
 4. `get_take` + `preview_frame` (wide via `source_t`) to inspect tape.
 5. `list_elements` at click times.
 6. `set_shotlist` with 3–8 shots tagged with `beat` and `camera.to.target` where needed.
@@ -48,7 +48,7 @@ The CLI entry is `shotlist-mcp` (after build: `node dist/bin.js`, or `npx tsx sr
 ## Ingest vs capture
 
 - **ingest_take**: point at a local mp4 (+ optional events/boxes jsonl). Use for existing footage.
-- **start_take / stop_take**: default page-aware capture with Playwright Chromium (`url` or `cdp_url`). Writes video, `events.jsonl`, and `boxes.jsonl`. Drive the page during recording with `take_goto`, `take_click`, and `take_type`.
+- **start_take / stop_take**: default page-aware capture with Playwright Chromium (`url` or `cdp_url`). Writes video, `events.jsonl`, and `boxes.jsonl`. Drive the page during recording with `take_goto`, `take_move`, `take_click`, and `take_type`. `take_click` travels, then clicks, then rests so the overlay does not teleport or crawl across a hold.
 - **x11 fallback**: `start_take({ mode: "x11" })` on Linux uses ffmpeg x11grab with empty jsonl. Not the real product path.
 
 ## Cursor double-draw
@@ -65,4 +65,4 @@ On ingested screengrabs that already include an OS cursor, the authored overlay 
 
 ## Tools
 
-`set_plan`, `get_plan`, `ingest_take`, `start_take`, `stop_take`, `take_goto`, `take_click`, `take_type`, `list_takes`, `get_take`, `list_elements`, `get_shotlist`, `set_shotlist`, `add_shot`, `update_shot`, `add_callout`, `preview_frame` (returns PNG path **and** an image content block), `preview_clip`, `render`.
+`set_plan`, `get_plan`, `ingest_take`, `start_take`, `stop_take`, `take_goto`, `take_move`, `take_click`, `take_type`, `list_takes`, `get_take`, `list_elements`, `get_shotlist`, `set_shotlist`, `add_shot`, `update_shot`, `add_callout`, `preview_frame` (returns PNG path **and** an image content block), `preview_clip`, `render`.
