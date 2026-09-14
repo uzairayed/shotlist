@@ -87,7 +87,7 @@ export function generateColorVideo(opts: {
       "18",
       "-r",
       String(fps),
-      "-vsync",
+      "-fps_mode",
       "cfr",
       "-movflags",
       "+faststart",

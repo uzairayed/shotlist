@@ -102,6 +102,24 @@ describe("set_plan / get_plan", () => {
     ).toThrow(/why/);
   });
 
+  it("rejects duplicate plan.pages urls", () => {
+    expect(() =>
+      setPlan(
+        {
+          version: 1,
+          product: "x",
+          url: "https://x",
+          pages: [
+            { url: "https://x/a", promise: "a" },
+            { url: "https://x/a/", promise: "b" },
+          ],
+          beats: [{ id: "b1", name: "a", why: "w", camera: "wide" }],
+        },
+        dir,
+      ),
+    ).toThrow(/unique/);
+  });
+
   it("get_plan returns NO_PLAN when missing", () => {
     try {
       getPlan(dir);

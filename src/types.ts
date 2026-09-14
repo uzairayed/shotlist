@@ -77,6 +77,8 @@ export interface TakeMeta {
   height: number;
   fps: number;
   dpr: number;
+  /** Seconds to add to event/box times to align with video source time. */
+  event_offset?: number;
   has_events: boolean;
   has_boxes: boolean;
   created_at: string;
@@ -134,16 +136,48 @@ export interface ShotSrc {
   out: number;
 }
 
+export type ShotType = "take" | "card";
+
 export interface Shot {
   id: string;
+  /** Default `"take"`. `"card"` is a title/interstitial with no source video. */
+  type?: ShotType;
   beat?: string;
-  take: string;
-  src: ShotSrc;
+  /** Required for take shots. */
+  take?: string;
+  /** Required for take shots. */
+  src?: ShotSrc;
+  /** Card title text (required when type is `"card"`). */
+  text?: string;
+  /** Optional card subtitle. */
+  subtitle?: string;
+  /** Card on-screen duration in seconds (required when type is `"card"`). */
+  duration?: number;
+  /** Card fade-in and fade-out length in seconds (default 0.25). */
+  fade?: number;
+  /** Plan page URL this card introduces or closes (validated against plan.pages). */
+  page?: string;
   camera?: CameraSpec;
   cursor?: CursorSpec;
   freeze_ms?: number;
   transition_in?: TransitionIn;
 }
+
+export function isCardShot(shot: Shot): boolean {
+  return shot.type === "card";
+}
+
+export function isTakeShot(shot: Shot): boolean {
+  return !isCardShot(shot);
+}
+
+export const DEFAULT_CARD_FADE = 0.25;
+/** Default pointer rest before the first scripted move (CSS px, top-leftish). */
+export const DEFAULT_POINTER_CSS = { x: 120, y: 160 };
+/** Default per-key delay for take_type (readable pace). */
+export const DEFAULT_TYPE_DELAY_MS = 55;
+/** Soft tolerance when comparing edit length to plan.target_seconds. */
+export const TARGET_SECONDS_TOLERANCE = 0.2;
 
 export interface Callout {
   id: string;

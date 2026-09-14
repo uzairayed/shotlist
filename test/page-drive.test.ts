@@ -55,7 +55,18 @@ describe("page drive tools", { timeout: 60_000 }, () => {
           (e.selector === "#cta" || e.selector.endsWith("#cta")),
       );
       expect(click).toBeTruthy();
-      const listed = listElements(result.take_id, click!.t, null, dir);
+      const meta = JSON.parse(
+        fs.readFileSync(
+          path.join(dir, "takes", result.take_id, "meta.json"),
+          "utf8",
+        ),
+      ) as { event_offset?: number };
+      const listed = listElements(
+        result.take_id,
+        click!.t + (meta.event_offset ?? 0),
+        null,
+        dir,
+      );
       const cta = listed.elements.find((e) => e.selector === "#cta");
       expect(cta).toBeTruthy();
       const r = cta!.rect;

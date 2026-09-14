@@ -10,6 +10,7 @@ import { resetCaptureForTests } from "../src/page-session.js";
 import { setPlan } from "../src/plan.js";
 import { previewFrame, renderShotlist } from "../src/render.js";
 import { setShotlist } from "../src/shotlist.js";
+import { readTakeMeta } from "../src/takes.js";
 import { makeTempProject, rmTempProject, serveStaticFile } from "./helpers.js";
 
 const FIXTURE = path.resolve(
@@ -72,12 +73,32 @@ describe("page-aware live take to camera target", { timeout: 60_000 }, () => {
       );
       expect(click).toBeTruthy();
 
-      const listed = listElements(stopped.take_id, click!.t, null, dir);
+      const meta = readTakeMeta(stopped.take_id, dir);
+      const offset = meta.event_offset ?? 0;
+      const clickSrc = click!.t + offset;
+
+      const listed = listElements(stopped.take_id, clickSrc, null, dir);
       const cta = listed.elements.find((e) => e.selector === "#cta");
       expect(cta).toBeTruthy();
 
-      const srcIn = Math.max(0, click!.t - 0.2);
-      const srcOut = Math.min(stopped.duration, click!.t + 0.8);
+      const srcIn = Math.max(0, clickSrc - 0.2);
+      const srcOut = Math.min(stopped.duration, clickSrc + 0.8);
+      setPlan(
+        {
+          version: 1,
+          product: "fixture",
+          url: server.url,
+          beats: [
+            {
+              id: "b1",
+              name: "cta",
+              why: "click the primary control",
+              camera: "push-in",
+            },
+          ],
+        },
+        dir,
+      );
       setShotlist(
         {
           version: 1,
@@ -85,6 +106,7 @@ describe("page-aware live take to camera target", { timeout: 60_000 }, () => {
           shots: [
             {
               id: "s1",
+              beat: "b1",
               take: stopped.take_id,
               src: { in: srcIn, out: srcOut },
               camera: {

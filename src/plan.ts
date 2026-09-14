@@ -70,6 +70,26 @@ export function setPlan(
     }
   }
 
+  if (Array.isArray(plan.pages) && plan.pages.length > 0) {
+    const urls = plan.pages.map((p) => String(p.url ?? "").trim());
+    for (const url of urls) {
+      if (!url) {
+        throw new ToolError("BAD_INPUT", "each plan page requires url");
+      }
+    }
+    const normalized = urls.map((u) => u.replace(/\/+$/, "").toLowerCase());
+    if (new Set(normalized).size !== normalized.length) {
+      throw new ToolError("BAD_INPUT", "plan.pages urls must be unique");
+    }
+  }
+
+  if (
+    plan.target_seconds != null &&
+    (!Number.isFinite(plan.target_seconds) || plan.target_seconds <= 0)
+  ) {
+    throw new ToolError("BAD_INPUT", "plan.target_seconds must be a positive number");
+  }
+
   const beats = assignBeatIds(plan.beats);
   const out: PlanJson = { ...plan, version: 1, beats };
   fs.writeFileSync(planPath(dir), JSON.stringify(out, null, 2) + "\n");

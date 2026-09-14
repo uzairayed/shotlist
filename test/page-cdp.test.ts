@@ -9,6 +9,7 @@ import { startTake, stopTake } from "../src/capture.js";
 import { loadEvents } from "../src/events.js";
 import { takeClick } from "../src/page-drive.js";
 import { resetCaptureForTests } from "../src/page-session.js";
+import { readTakeMeta } from "../src/takes.js";
 import { makeTempProject, rmTempProject, serveStaticFile } from "./helpers.js";
 
 const FIXTURE = path.resolve(
@@ -73,7 +74,8 @@ describe("page take attached over cdp_url", { timeout: 60_000 }, () => {
       // The recorded mp4 shares the take timebase, so the click is inside it.
       expect(result.duration).toBeGreaterThanOrEqual(clicked.t);
       expect(fs.existsSync(result.video_path)).toBe(true);
-      const listed = listElements(result.take_id, clicked.t, null, dir);
+      const offset = readTakeMeta(result.take_id, dir).event_offset ?? 0;
+      const listed = listElements(result.take_id, clicked.t + offset, null, dir);
       expect(listed.elements.some((e) => e.selector === "#cta")).toBe(true);
     } finally {
       await server.close();
@@ -154,7 +156,8 @@ describe("page take attached over cdp_url", { timeout: 60_000 }, () => {
       const clicked = await takeClick({ selector: "#cta" }, dir);
       const result = await stopTake(dir);
 
-      const listed = listElements(result.take_id, clicked.t, null, dir);
+      const offset = readTakeMeta(result.take_id, dir).event_offset ?? 0;
+      const listed = listElements(result.take_id, clicked.t + offset, null, dir);
       const cta = listed.elements.find((e) => e.selector === "#cta");
       expect(cta).toBeTruthy();
       const css = await userPage.evaluate(() => {

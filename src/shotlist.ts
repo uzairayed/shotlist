@@ -10,9 +10,15 @@ import { ensureProject, getShotlistDir } from "./project.js";
 import { listTakeMetas, readTakeMeta } from "./takes.js";
 import type {
   Callout,
+  PlanJson,
   Shot,
   ShotlistJson,
   TransitionIn,
+} from "./types.js";
+import {
+  DEFAULT_CARD_FADE,
+  TARGET_SECONDS_TOLERANCE,
+  isCardShot,
 } from "./types.js";
 
 const EPS = 1e-3;
@@ -33,8 +39,13 @@ export function writeShotlist(shotlist: ShotlistJson, dir?: string): void {
 }
 
 function playingDuration(shot: Shot, defaultFreeze: number): number {
+  if (isCardShot(shot)) {
+    const d = shot.duration ?? 0;
+    return d > 0 ? d : 0;
+  }
   const freeze = (shot.freeze_ms ?? defaultFreeze) / 1000;
-  return shot.src.out - shot.src.in + freeze;
+  const src = shot.src!;
+  return src.out - src.in + freeze;
 }
 
 function transitionDuration(t: TransitionIn | undefined, isFirst: boolean): number {
@@ -79,6 +90,107 @@ export interface ValidateOptions {
   defaultFreeze?: number;
 }
 
+function pageUrlForShot(shot: Shot, plan: PlanJson | null): string | null {
+  if (shot.page && String(shot.page).trim()) return String(shot.page).trim();
+  if (shot.beat && plan) {
+    const beat = plan.beats.find((b) => b.id === shot.beat);
+    if (beat?.url && String(beat.url).trim()) return String(beat.url).trim();
+  }
+  return null;
+}
+
+function normalizePageUrl(url: string): string {
+  return url.replace(/\/+$/, "").toLowerCase();
+}
+
+function validateCardShot(
+  shot: Shot,
+  plan: PlanJson | null,
+  pageUrls: Set<string>,
+  warnings: string[],
+  strict: boolean,
+): void {
+  if (!shot.text || String(shot.text).trim() === "") {
+    throw new ToolError("INVALID_SHOTLIST", "card shots require text");
+  }
+  if (
+    shot.duration == null ||
+    !Number.isFinite(shot.duration) ||
+    shot.duration <= 0
+  ) {
+    throw new ToolError(
+      "INVALID_SHOTLIST",
+      "card shots require positive duration",
+    );
+  }
+  const fade = shot.fade ?? DEFAULT_CARD_FADE;
+  if (!Number.isFinite(fade) || fade < 0) {
+    throw new ToolError("INVALID_SHOTLIST", "card fade must be >= 0");
+  }
+  if (fade * 2 > shot.duration + EPS) {
+    throw new ToolError(
+      "INVALID_SHOTLIST",
+      "card fade*2 must be <= duration",
+    );
+  }
+  if (shot.take || shot.src) {
+    warnOrThrow(
+      warnings,
+      strict,
+      `card shot ${shot.id} should not set take/src`,
+    );
+  }
+
+  const page = pageUrlForShot(shot, plan);
+  if (plan && Array.isArray(plan.pages) && plan.pages.length > 0) {
+    if (!page) {
+      throw new ToolError(
+        "INVALID_SHOTLIST",
+        `card shot ${shot.id} must map to a plan page (set page or beat.url)`,
+      );
+    }
+    if (!pageUrls.has(normalizePageUrl(page))) {
+      throw new ToolError(
+        "INVALID_SHOTLIST",
+        `card shot ${shot.id} page is not in plan.pages: ${page}`,
+      );
+    }
+  }
+}
+
+function validateNoMidPageCards(shots: Shot[], plan: PlanJson | null): void {
+  for (let i = 0; i < shots.length; i++) {
+    if (!isCardShot(shots[i])) continue;
+    let prevTake: Shot | null = null;
+    let nextTake: Shot | null = null;
+    for (let j = i - 1; j >= 0; j--) {
+      if (!isCardShot(shots[j])) {
+        prevTake = shots[j];
+        break;
+      }
+    }
+    for (let j = i + 1; j < shots.length; j++) {
+      if (!isCardShot(shots[j])) {
+        nextTake = shots[j];
+        break;
+      }
+    }
+    if (!prevTake || !nextTake) continue;
+    const prevPage = pageUrlForShot(prevTake, plan);
+    const nextPage = pageUrlForShot(nextTake, plan);
+    if (
+      prevPage &&
+      nextPage &&
+      normalizePageUrl(prevPage) === normalizePageUrl(nextPage)
+    ) {
+      throw new ToolError(
+        "INVALID_SHOTLIST",
+        `card shot ${shots[i].id} cannot sit mid-page between shots of ${prevPage}`,
+      );
+    }
+  }
+}
+
 export function validateShotlist(
   shotlist: ShotlistJson,
   opts: ValidateOptions = {},
@@ -115,6 +227,9 @@ export function validateShotlist(
   const takes = new Set(listTakeMetas(dir).map((t) => t.take_id));
   const plan = readPlan(dir);
   const beatIds = new Set(plan?.beats.map((b) => b.id) ?? []);
+  const pageUrls = new Set(
+    (plan?.pages ?? []).map((p) => normalizePageUrl(String(p.url))),
+  );
 
   if (!hasPlan(dir)) warnings.push("NO_PLAN");
 
@@ -128,6 +243,48 @@ export function validateShotlist(
     }
     ids.add(shot.id);
 
+    if (shot.type != null && shot.type !== "take" && shot.type !== "card") {
+      throw new ToolError(
+        "INVALID_SHOTLIST",
+        `unknown shot type: ${String(shot.type)}`,
+      );
+    }
+
+    if (strict && (!shot.beat || String(shot.beat).trim() === "")) {
+      throw new ToolError(
+        "INVALID_SHOTLIST",
+        `shot ${shot.id} requires beat in strict mode`,
+      );
+    }
+
+    if (shot.beat && plan && !beatIds.has(shot.beat)) {
+      warnOrThrow(warnings, strict, `unknown beat: ${shot.beat}`);
+    }
+
+    if (isCardShot(shot)) {
+      validateCardShot(shot, plan, pageUrls, warnings, strict);
+      const tin = shot.transition_in ?? { type: "cut" as const };
+      if (tin.type !== "cut" && tin.type !== "crossfade") {
+        throw new ToolError(
+          "INVALID_SHOTLIST",
+          `unknown transition type: ${tin.type}`,
+        );
+      }
+      if (i > 0 && tin.type === "crossfade") {
+        const d = tin.duration ?? 0.25;
+        const prev = shots[i - 1];
+        const prevPlay = playingDuration(prev, defaultFreeze);
+        const curPlay = playingDuration(shot, defaultFreeze);
+        if (!(d < prevPlay && d < curPlay)) {
+          throw new ToolError(
+            "INVALID_SHOTLIST",
+            "crossfade too long for adjacent shots",
+          );
+        }
+      }
+      continue;
+    }
+
     if (!shot.take) {
       throw new ToolError("INVALID_SHOTLIST", "shot.take is required");
     }
@@ -139,10 +296,8 @@ export function validateShotlist(
     if (shot.src == null || shot.src.in == null || shot.src.out == null) {
       throw new ToolError("INVALID_SHOTLIST", "shot.src.in and src.out required");
     }
-    if (!(shot.src.in < shot.src.out - 0 /* allow equal? no */)) {
-      if (shot.src.in >= shot.src.out) {
-        throw new ToolError("INVALID_SHOTLIST", "src.in must be < src.out");
-      }
+    if (shot.src.in >= shot.src.out) {
+      throw new ToolError("INVALID_SHOTLIST", "src.in must be < src.out");
     }
     const meta = readTakeMeta(shot.take, dir);
     if (shot.src.in < -EPS || shot.src.out > meta.duration + EPS) {
@@ -166,11 +321,6 @@ export function validateShotlist(
       );
     }
 
-    if (shot.beat && plan && !beatIds.has(shot.beat)) {
-      warnOrThrow(warnings, strict, `unknown beat: ${shot.beat}`);
-    }
-
-    // Crossfade length check against previous
     if (i > 0 && tin.type === "crossfade") {
       const d = tin.duration ?? 0.25;
       const prev = shots[i - 1];
@@ -182,6 +332,28 @@ export function validateShotlist(
           "crossfade too long for adjacent shots",
         );
       }
+    }
+  }
+
+  validateNoMidPageCards(shots, plan);
+
+  if (plan?.target_seconds != null) {
+    let sumPlaying = 0;
+    let totalCrossfade = 0;
+    for (let i = 0; i < shots.length; i++) {
+      sumPlaying += playingDuration(shots[i], defaultFreeze);
+      totalCrossfade += transitionDuration(shots[i].transition_in, i === 0);
+    }
+    const editDuration = sumPlaying - totalCrossfade;
+    const target = plan.target_seconds;
+    const delta = Math.abs(editDuration - target);
+    const allowed = Math.max(2, target * TARGET_SECONDS_TOLERANCE);
+    if (delta > allowed) {
+      warnOrThrow(
+        warnings,
+        strict,
+        `edit length ${editDuration.toFixed(1)}s vs target_seconds ${target}`,
+      );
     }
   }
 

@@ -6,11 +6,15 @@ import {
   nowT,
   requirePageRecording,
   sampleBoxes,
+  settlePage,
   writePointerMove,
   type PageRecording,
 } from "./page-session.js";
 import { easedPointerSamples, restPointerSamples } from "./pointer-path.js";
-import { DEFAULT_PROJECT } from "./types.js";
+import {
+  DEFAULT_PROJECT,
+  DEFAULT_TYPE_DELAY_MS,
+} from "./types.js";
 
 function recordingT(startedAtMs: number): number {
   return (Date.now() - startedAtMs) / 1000;
@@ -36,9 +40,18 @@ async function waitForDriveSelector(page: Page, selector: string): Promise<void>
   }
 }
 
-async function cssCenterOf(page: Page, selector: string): Promise<{ x: number; y: number }> {
+async function cssCenterOf(
+  page: Page,
+  selector: string,
+): Promise<{ x: number; y: number }> {
   await waitForDriveSelector(page, selector);
-  const box = await page.locator(selector).boundingBox();
+  const locator = page.locator(selector).first();
+  try {
+    await locator.scrollIntoViewIfNeeded({ timeout: 5000 });
+  } catch {
+    throw new ToolError("ELEMENT_NOT_FOUND", `element not found: ${selector}`);
+  }
+  const box = await locator.boundingBox();
   if (!box) {
     throw new ToolError("ELEMENT_NOT_FOUND", `element not found: ${selector}`);
   }
@@ -76,7 +89,7 @@ async function travelPointer(
   duration: number,
   easeName: EaseName,
 ): Promise<void> {
-  const from = rec.lastPointerCss ?? { x: 0, y: 0 };
+  const from = rec.lastPointerCss ?? { x: 120, y: 160 };
   const t0 = nowT(rec);
   await playPointerSamples(
     rec,
@@ -105,6 +118,7 @@ export async function takeGoto(
 ): Promise<{ ok: true; url: string; t: number }> {
   const rec = requirePageRecording();
   await rec.page.goto(args.url, { waitUntil: "domcontentloaded" });
+  await settlePage(rec.page);
   return {
     ok: true,
     url: rec.page.url(),
@@ -169,9 +183,12 @@ export async function takeType(
   _root?: string,
 ): Promise<{ ok: true; selector: string; t: number }> {
   const rec = requirePageRecording();
-  await waitForDriveSelector(rec.page, args.selector);
-  await rec.page.click(args.selector);
-  await rec.page.keyboard.type(args.text, { delay: args.delay ?? 0 });
+  const toCss = await cssCenterOf(rec.page, args.selector);
+  const travel = DEFAULT_PROJECT.defaults.cursor.travel;
+  await travelPointer(rec, toCss, travel, "ease-out");
+  await rec.page.mouse.click(toCss.x, toCss.y);
+  const delay = args.delay ?? DEFAULT_TYPE_DELAY_MS;
+  await rec.page.keyboard.type(args.text, { delay });
   return {
     ok: true,
     selector: args.selector,
