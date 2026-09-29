@@ -40,7 +40,19 @@ export function findElementAtTime(
   t: number,
   root?: string,
 ): ElementBox | null {
-  const { elements } = boxesAtTime(loadBoxes(takeId, root), t);
+  const metaPath = path.join(takeDir(takeId, root), "meta.json");
+  let eventT = t;
+  if (fs.existsSync(metaPath)) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, "utf8")) as {
+        event_offset?: number;
+      };
+      if (meta.event_offset) eventT = t - meta.event_offset;
+    } catch {
+      /* ignore */
+    }
+  }
+  const { elements } = boxesAtTime(loadBoxes(takeId, root), eventT);
   return elements.find((e) => e.selector === selector) ?? null;
 }
 
@@ -55,7 +67,16 @@ export function listElements(
   if (!fs.existsSync(metaPath)) {
     throw new ToolError("TAKE_NOT_FOUND", `take not found: ${takeId}`);
   }
-  const snap = boxesAtTime(loadBoxes(takeId, root), t);
+  let eventT = t;
+  try {
+    const meta = JSON.parse(fs.readFileSync(metaPath, "utf8")) as {
+      event_offset?: number;
+    };
+    if (meta.event_offset) eventT = t - meta.event_offset;
+  } catch {
+    /* ignore */
+  }
+  const snap = boxesAtTime(loadBoxes(takeId, root), eventT);
   let elements = snap.elements;
   if (query && query.trim()) {
     const q = query.toLowerCase();

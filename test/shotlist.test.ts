@@ -173,4 +173,120 @@ describe("shotlist CRUD", () => {
       expect((err as ToolError).code).toBe("NO_SHOTLIST");
     }
   });
+
+  it("accepts card shots with text/duration/fade and page mapping", () => {
+    setPlan(
+      {
+        ...structuredClone(TAGISER_PLAN),
+        pages: [
+          {
+            url: "https://www.tagiser.com",
+            promise: "labels",
+          },
+          {
+            url: "https://www.tagiser.com/generation",
+            promise: "create",
+          },
+        ],
+        target_seconds: 8,
+      },
+      dir,
+    );
+    const r = setShotlist(
+      {
+        version: 1,
+        shots: [
+          {
+            id: "c1",
+            type: "card",
+            beat: "b1",
+            page: "https://www.tagiser.com",
+            text: "Tagiser",
+            subtitle: "Name labels",
+            duration: 2,
+            fade: 0.3,
+          },
+          {
+            id: "s1",
+            beat: "b1",
+            take: takeId,
+            src: { in: 0, out: 2 },
+            freeze_ms: 0,
+          },
+          {
+            id: "c2",
+            type: "card",
+            beat: "b2",
+            page: "https://www.tagiser.com/generation",
+            text: "Create",
+            duration: 1.5,
+          },
+        ],
+      },
+      false,
+      dir,
+    );
+    expect(r.ok).toBe(true);
+    expect(r.shot_count).toBe(3);
+  });
+
+  it("rejects mid-page cards and requires beat in strict", () => {
+    setPlan(
+      {
+        ...structuredClone(TAGISER_PLAN),
+        pages: [
+          { url: "https://www.tagiser.com", promise: "home" },
+        ],
+      },
+      dir,
+    );
+    expect(() =>
+      setShotlist(
+        {
+          version: 1,
+          shots: [
+            {
+              id: "s1",
+              beat: "b1",
+              take: takeId,
+              src: { in: 0, out: 1 },
+            },
+            {
+              id: "c1",
+              type: "card",
+              beat: "b1",
+              page: "https://www.tagiser.com",
+              text: "oops",
+              duration: 1,
+            },
+            {
+              id: "s2",
+              beat: "b1",
+              take: takeId,
+              src: { in: 1, out: 2 },
+            },
+          ],
+        },
+        false,
+        dir,
+      ),
+    ).toThrow(/mid-page/);
+
+    expect(() =>
+      setShotlist(
+        {
+          version: 1,
+          shots: [
+            {
+              id: "s1",
+              take: takeId,
+              src: { in: 0, out: 1 },
+            },
+          ],
+        },
+        true,
+        dir,
+      ),
+    ).toThrow(/requires beat/);
+  });
 });

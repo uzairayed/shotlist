@@ -98,6 +98,7 @@ export function ingestTake(
     boxes_path?: string | null;
     take_id?: string | null;
     dpr?: number;
+    event_offset?: number;
   },
   root?: string,
 ): IngestResult {
@@ -129,6 +130,11 @@ export function ingestTake(
   const has_events = copyOrEmpty(args.events_path ?? null, eventsPath);
   const has_boxes = copyOrEmpty(args.boxes_path ?? null, boxesPath);
 
+  const event_offset =
+    args.event_offset != null && Number.isFinite(args.event_offset)
+      ? Number(args.event_offset.toFixed(3))
+      : 0;
+
   const meta: TakeMeta = {
     take_id: takeId,
     duration: Number(after.duration.toFixed(3)),
@@ -136,6 +142,7 @@ export function ingestTake(
     height,
     fps,
     dpr: args.dpr ?? 1,
+    event_offset,
     has_events,
     has_boxes,
     created_at: new Date().toISOString(),

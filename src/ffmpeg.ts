@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { ToolError } from "./errors.js";
@@ -8,8 +8,17 @@ export function resolveFfmpeg(env: NodeJS.ProcessEnv = process.env): string {
   const which = spawnSync("which", ["ffmpeg"], { encoding: "utf8" });
   if (which.status === 0 && which.stdout.trim()) return which.stdout.trim();
   // Also try common paths when PATH is stripped in tests
-  for (const p of ["/opt/homebrew/bin/ffmpeg", "/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) {
+  for (const p of [
+    "/opt/homebrew/bin/ffmpeg",
+    "/usr/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+  ]) {
     if (fs.existsSync(p)) return p;
+  }
+  // Windows: rely on PATH via where
+  const where = spawnSync("where", ["ffmpeg"], { encoding: "utf8" });
+  if (where.status === 0 && where.stdout.trim()) {
+    return where.stdout.trim().split(/\r?\n/)[0]!;
   }
   throw new ToolError("FFMPEG_MISSING", "ffmpeg is required but was not found");
 }
@@ -71,7 +80,9 @@ export interface ProbeResult {
 export function probeVideo(input: string, ffmpegBin?: string): ProbeResult {
   const bin = ffmpegBin ?? requireFfmpeg();
   // Prefer ffprobe next to ffmpeg
-  const ffprobe = bin.replace(/ffmpeg$/, "ffprobe");
+  const ffprobe = bin.replace(/ffmpeg(\.exe)?$/i, (_, ext) =>
+    ext ? `ffprobe${ext}` : "ffprobe",
+  );
   const probeBin = fs.existsSync(ffprobe) ? ffprobe : bin;
   const args =
     probeBin === bin
@@ -153,6 +164,11 @@ export function evenDim(n: number): number {
   return i % 2 === 0 ? i : i - 1;
 }
 
+/** CFR flag: ffmpeg 9 removed `-vsync`; `-fps_mode` works on 5.1+. */
+export function cfrArgs(): string[] {
+  return ["-fps_mode", "cfr"];
+}
+
 export function ingestTranscode(
   input: string,
   output: string,
@@ -178,8 +194,7 @@ export function ingestTranscode(
       "18",
       "-r",
       String(takeFps),
-      "-vsync",
-      "cfr",
+      ...cfrArgs(),
       "-movflags",
       "+faststart",
       "-vf",
@@ -194,6 +209,21 @@ export function ingestTranscode(
       `ffmpeg ingest failed: ${r.stderr?.slice(-500) || "unknown"}`,
     );
   }
+}
+
+function runFfmpegAsync(
+  bin: string,
+  args: string[],
+): Promise<{ status: number | null; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { windowsHide: true });
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, stderr }));
+  });
 }
 
 export function extractFramePng(
@@ -228,6 +258,103 @@ export function extractFramePng(
   }
 }
 
+export async function extractFramePngAsync(
+  videoPath: string,
+  tSrc: number,
+  outPng: string,
+  ffmpegBin?: string,
+): Promise<void> {
+  const bin = ffmpegBin ?? requireFfmpeg();
+  fs.mkdirSync(path.dirname(outPng), { recursive: true });
+  const r = await runFfmpegAsync(bin, [
+    "-y",
+    "-ss",
+    tSrc.toFixed(3),
+    "-i",
+    videoPath,
+    "-frames:v",
+    "1",
+    "-q:v",
+    "2",
+    outPng,
+  ]);
+  if (r.status !== 0) {
+    throw new ToolError(
+      "RENDER_FAILED",
+      `ffmpeg frame extract failed: ${r.stderr?.slice(-400) || "unknown"}`,
+    );
+  }
+}
+
+/**
+ * Decode a closed time range of source frames into cacheDir as
+ * `{takeId}_{frameIndex}.png`. Skips frames that already exist.
+ */
+export async function extractFrameRangeAsync(
+  videoPath: string,
+  takeId: string,
+  fps: number,
+  tStart: number,
+  tEnd: number,
+  cacheDir: string,
+  ffmpegBin?: string,
+): Promise<void> {
+  const bin = ffmpegBin ?? requireFfmpeg();
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const startIdx = Math.max(0, Math.floor(tStart * fps));
+  const endIdx = Math.max(startIdx, Math.ceil(tEnd * fps));
+  let anyMissing = false;
+  for (let i = startIdx; i <= endIdx; i++) {
+    const out = path.join(cacheDir, `${takeId}_${i}.png`);
+    if (!fs.existsSync(out)) {
+      anyMissing = true;
+      break;
+    }
+  }
+  if (!anyMissing) return;
+
+  // Contiguous decode into a temp pattern, then rename.
+  const tmpDir = fs.mkdtempSync(path.join(cacheDir, "range-"));
+  try {
+    const duration = Math.max(1 / fps, (endIdx - startIdx + 1) / fps);
+    const pattern = path.join(tmpDir, "f-%06d.png");
+    const r = await runFfmpegAsync(bin, [
+      "-y",
+      "-ss",
+      (startIdx / fps).toFixed(3),
+      "-i",
+      videoPath,
+      "-t",
+      duration.toFixed(3),
+      ...cfrArgs(),
+      "-r",
+      String(fps),
+      "-q:v",
+      "2",
+      pattern,
+    ]);
+    if (r.status !== 0) {
+      throw new ToolError(
+        "RENDER_FAILED",
+        `ffmpeg range extract failed: ${r.stderr?.slice(-400) || "unknown"}`,
+      );
+    }
+    const files = fs
+      .readdirSync(tmpDir)
+      .filter((f) => f.startsWith("f-") && f.endsWith(".png"))
+      .sort();
+    for (let i = 0; i < files.length; i++) {
+      const frameIdx = startIdx + i;
+      const dest = path.join(cacheDir, `${takeId}_${frameIdx}.png`);
+      if (!fs.existsSync(dest)) {
+        fs.renameSync(path.join(tmpDir, files[i]!), dest);
+      }
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 export function encodeFramesToMp4(
   framePattern: string,
   fps: number,
@@ -255,8 +382,7 @@ export function encodeFramesToMp4(
       "yuv420p",
       "-r",
       String(fps),
-      "-vsync",
-      "cfr",
+      ...cfrArgs(),
       "-movflags",
       "+faststart",
       outMp4,

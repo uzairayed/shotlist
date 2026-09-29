@@ -25,6 +25,8 @@ import {
 } from "./page-sampler.js";
 import { ensureProject } from "./project.js";
 import { ingestTake, newTakeId, takeDir, type IngestResult } from "./takes.js";
+import { DEFAULT_POINTER_CSS } from "./types.js";
+import { evenDim } from "./ffmpeg.js";
 
 export const POINTER_MOVE_THROTTLE_MS = 50;
 
@@ -52,6 +54,8 @@ export interface PageRecording {
   context: BrowserContext;
   dpr: number;
   fps: number;
+  /** Wall clock when Playwright/CDP video actually began. */
+  videoEpochMs: number;
   startedAtMs: number;
   eventsPath: string;
   boxesPath: string;
@@ -106,6 +110,25 @@ export function requirePageRecording(): PageRecording {
 
 export function nowT(rec: PageRecording): number {
   return (Date.now() - rec.startedAtMs) / 1000;
+}
+
+/** Wait for network idle, fonts, and a short quiet window after navigation. */
+export async function settlePage(page: Page): Promise<void> {
+  try {
+    await page.waitForLoadState("networkidle", { timeout: 8000 });
+  } catch {
+    /* soft: some SPAs never go fully idle */
+  }
+  try {
+    await page.evaluate(async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const fonts = (document as any).fonts;
+      if (fonts?.ready) await fonts.ready;
+    });
+  } catch {
+    /* fonts API optional */
+  }
+  await new Promise((r) => setTimeout(r, 200));
 }
 
 export function writePointerMove(
@@ -797,19 +820,30 @@ export async function startPageTake(
     const viewport = args.viewport ?? DEFAULT_VIEWPORT;
     const dpr = args.dpr ?? 1;
     const fps = args.fps ?? 30;
+    const videoSize = {
+      width: evenDim(viewport.width * dpr),
+      height: evenDim(viewport.height * dpr),
+    };
 
     browser = await chromium.launch({ args: ["--disable-dev-shm-usage"] });
+    const videoEpochMs = Date.now();
     context = await browser.newContext({
       viewport,
       deviceScaleFactor: dpr,
-      recordVideo: { dir, size: viewport },
+      // Must match event/box source pixels (viewport * dpr), not CSS-only.
+      recordVideo: { dir, size: videoSize },
     });
     await context.addInitScript({ content: INSTALL_PAGE_HOOKS_SOURCE });
     page = await context.newPage();
-    const startedAtMs = Date.now();
     await hidePageCursor(page);
     await page.exposeFunction("shotlistPushEvent", onPageEvent);
     await page.addInitScript({ content: INSTALL_PAGE_HOOKS_SOURCE });
+
+    const startPointer = {
+      x: Math.min(DEFAULT_POINTER_CSS.x, Math.max(8, viewport.width * 0.08)),
+      y: Math.min(DEFAULT_POINTER_CSS.y, Math.max(8, viewport.height * 0.12)),
+    };
+    await page.mouse.move(startPointer.x, startPointer.y);
 
     current = {
       takeId,
@@ -819,12 +853,13 @@ export async function startPageTake(
       context,
       dpr,
       fps,
-      startedAtMs,
+      videoEpochMs,
+      startedAtMs: videoEpochMs,
       eventsPath,
       boxesPath,
       lastBoxSampleT: null,
       lastPointerMoveAt: null,
-      lastPointerCss: null,
+      lastPointerCss: startPointer,
       scriptedPointer: false,
       launchedByUs: true,
       bindingName: "shotlistPushEvent",
@@ -834,7 +869,11 @@ export async function startPageTake(
     page.on("framenavigated", onFrameNavigated);
 
     await page.goto(args.url, { waitUntil: "domcontentloaded" });
+    await settlePage(page);
     await hidePageCursor(page);
+    // Event clock starts after settle so t=0 aligns with first usable frame.
+    current.startedAtMs = Date.now();
+    writePointerMove(current, startPointer.x, startPointer.y, 0);
     appendJsonl(current.eventsPath, {
       t: nowT(current),
       type: "nav",
@@ -922,6 +961,7 @@ async function attachPageTake(
     });
     if (args.url) {
       await page.goto(args.url, { waitUntil: "domcontentloaded" });
+      await settlePage(page);
     }
     bindingName = eventBindingName(takeId);
     await bindAttachedHooks(page, bindingName);
@@ -934,6 +974,15 @@ async function attachPageTake(
     const cssWidth = await page.evaluate(() => window.innerWidth);
     const dpr = args.dpr ?? (cssWidth > 0 ? cast.frameWidth / cssWidth : 1);
 
+    const vp = page.viewportSize() ?? DEFAULT_VIEWPORT;
+    const startPointer = {
+      x: Math.min(DEFAULT_POINTER_CSS.x, Math.max(8, vp.width * 0.08)),
+      y: Math.min(DEFAULT_POINTER_CSS.y, Math.max(8, vp.height * 0.12)),
+    };
+    await page.mouse.move(startPointer.x, startPointer.y).catch(() => {
+      /* attached targets may not accept mouse */
+    });
+
     current = {
       takeId,
       dir,
@@ -942,12 +991,13 @@ async function attachPageTake(
       context,
       dpr,
       fps,
-      startedAtMs: cast.startedAtMs,
+      videoEpochMs: cast.startedAtMs,
+      startedAtMs: Date.now(),
       eventsPath,
       boxesPath,
       lastBoxSampleT: null,
       lastPointerMoveAt: null,
-      lastPointerCss: null,
+      lastPointerCss: startPointer,
       scriptedPointer: false,
       launchedByUs: false,
       bindingName,
@@ -958,6 +1008,7 @@ async function attachPageTake(
     acceptNavEvents = false;
     page.on("framenavigated", onFrameNavigated);
 
+    writePointerMove(current, startPointer.x, startPointer.y, 0);
     appendJsonl(eventsPath, {
       t: nowT(current),
       type: "nav",
@@ -1000,6 +1051,12 @@ export async function stopPageTake(root?: string): Promise<IngestResult> {
     boxTimer = null;
   }
   acceptNavEvents = false;
+  const eventClockEnd = nowT(rec);
+  const event_offset = Math.max(
+    0,
+    Number(((rec.startedAtMs - rec.videoEpochMs) / 1000).toFixed(3)),
+  );
+  void eventClockEnd;
   const video = rec.launchedByUs ? rec.page.video() : null;
   try {
     let videoPath = "";
@@ -1029,6 +1086,7 @@ export async function stopPageTake(root?: string): Promise<IngestResult> {
         boxes_path: rec.boxesPath,
         take_id: rec.takeId,
         dpr: rec.dpr,
+        event_offset,
       },
       root,
     );

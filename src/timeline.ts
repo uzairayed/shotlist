@@ -61,6 +61,9 @@ export function sourceTimeForShot(
   shot: Shot,
   tLocal: number,
 ): { tSrc: number; frozen: boolean } {
+  if (shot.type === "card" || !shot.src) {
+    return { tSrc: 0, frozen: true };
+  }
   const play = shot.src.out - shot.src.in;
   if (tLocal < play - 1e-9) {
     return { tSrc: shot.src.in + tLocal, frozen: false };
@@ -84,8 +87,12 @@ export function firstShotCoveringSource(
   sourceT: number,
 ): TimelineShot | null {
   for (const ts of timeline) {
-    if (ts.shot.take !== takeId) continue;
-    if (sourceT >= ts.shot.src.in - 1e-9 && sourceT <= ts.shot.src.out + 1e-9) {
+    if (ts.shot.type === "card") continue;
+    if (ts.shot.take !== takeId || !ts.shot.src) continue;
+    if (
+      sourceT >= ts.shot.src.in - 1e-9 &&
+      sourceT <= ts.shot.src.out + 1e-9
+    ) {
       return ts;
     }
   }

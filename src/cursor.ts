@@ -36,6 +36,7 @@ function resolvePos(
   }
   if ("target" in input) {
     if (typeof input.target === "string") {
+      if (!shot.take) return null;
       const el = findElementAtTime(shot.take, input.target, tSrc, root);
       if (!el) return null;
       return {
@@ -72,6 +73,15 @@ export function cursorOverlayForShot(opts: {
     cursor != null && (cursor.from != null || cursor.to != null);
 
   if (hasAuthored) {
+    if (!shot.src) {
+      return {
+        x: take.width / 2,
+        y: take.height / 2,
+        scale: 1,
+        visible: false,
+        warning: "NO_CURSOR_PATH",
+      };
+    }
     const travel = cursor!.travel ?? defaults.cursor.travel;
     const dwell_ms = cursor!.dwell_ms ?? defaults.cursor.dwell_ms;
     const from = resolvePos(
@@ -119,9 +129,19 @@ export function cursorOverlayForShot(opts: {
     return { x, y, scale, visible: true };
   }
 
-  // Event path
+  // Event path (align event clock to video via event_offset)
+  if (!shot.take) {
+    return {
+      x: 0,
+      y: 0,
+      scale: 1,
+      visible: false,
+      warning: "NO_CURSOR_PATH",
+    };
+  }
   const events = loadEvents(shot.take, root);
-  const pos = cursorFromEvents(events, tSrc);
+  const eventT = tSrc - (take.event_offset ?? 0);
+  const pos = cursorFromEvents(events, eventT);
   if (!pos) {
     if (cursor?.visible === true || (cursor == null && visibleDefault)) {
       // visible true but no path

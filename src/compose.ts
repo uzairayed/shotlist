@@ -10,6 +10,7 @@ import {
   isKnownEase,
 } from "./camera.js";
 import { findElementAtTime } from "./boxes.js";
+import { ToolError } from "./errors.js";
 import type {
   Callout,
   CameraPoseInput,
@@ -20,13 +21,14 @@ import type {
   Shot,
   TakeMeta,
 } from "./types.js";
+import { DEFAULT_CARD_FADE, isCardShot } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ASSETS_DIR = path.resolve(__dirname, "../assets");
 
 export interface ComposeInput {
-  sourceFramePath: string;
-  take: TakeMeta;
+  sourceFramePath?: string;
+  take?: TakeMeta;
   shot: Shot;
   tLocal: number;
   tSrc: number;
@@ -82,7 +84,10 @@ function resolveShotPose(
     zoomMin: defaults.camera.zoom_min,
     zoomMax: defaults.camera.zoom_max,
     defaultPadding: defaults.camera.padding,
-    findElement: (sel) => findElementAtTime(shot.take, sel, tSrc, root),
+    findElement: (sel) =>
+      shot.take
+        ? findElementAtTime(shot.take, sel, tSrc, root)
+        : null,
   });
 }
 
@@ -96,6 +101,24 @@ export function cameraForShotTime(
   root?: string,
 ): { camera: ResolvedCamera; warnings: string[]; toPose: { cx: number; cy: number; zoom: number } } {
   const warnings: string[] = [];
+  if (isCardShot(shot) || !shot.src) {
+    const wide = cropFromCenterZoom(
+      take.width,
+      take.height,
+      output.width,
+      output.height,
+      take.width / 2,
+      take.height / 2,
+      1,
+      defaults.camera.zoom_min,
+      defaults.camera.zoom_max,
+    );
+    return {
+      camera: wide.camera,
+      warnings,
+      toPose: { cx: take.width / 2, cy: take.height / 2, zoom: 1 },
+    };
+  }
   const play = shot.src.out - shot.src.in;
   const cam = shot.camera;
   const easeName = (cam?.ease ?? defaults.camera.ease) as string;
@@ -178,10 +201,84 @@ export function cameraForShotTime(
   return { camera: interp.camera, warnings, toPose: toR.pose };
 }
 
+export function cardOpacity(tLocal: number, duration: number, fade: number): number {
+  if (duration <= 0) return 0;
+  const f = Math.max(0, Math.min(fade, duration / 2));
+  if (f <= 0) return 1;
+  if (tLocal < f) return Math.max(0, Math.min(1, tLocal / f));
+  if (tLocal > duration - f) {
+    return Math.max(0, Math.min(1, (duration - tLocal) / f));
+  }
+  return 1;
+}
+
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+/** Render a title card PNG (no source take). */
+export async function composeCardFrame(opts: {
+  shot: Shot;
+  tLocal: number;
+  output: OutputDefaults;
+}): Promise<ComposeResult> {
+  const { shot, tLocal, output } = opts;
+  const duration = shot.duration ?? 0;
+  const fade = shot.fade ?? DEFAULT_CARD_FADE;
+  const alpha = cardOpacity(tLocal, duration, fade);
+  const text = escapeXml(String(shot.text ?? ""));
+  const subtitle = shot.subtitle ? escapeXml(String(shot.subtitle)) : "";
+  const titleSize = Math.round(output.height * 0.06);
+  const subSize = Math.round(output.height * 0.03);
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${output.width}" height="${output.height}" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100%" height="100%" fill="#0b0d10"/>
+  <g opacity="${alpha.toFixed(4)}">
+    <text x="50%" y="${Math.round(output.height * 0.46)}" text-anchor="middle"
+      font-family="DejaVu Sans, Arial, sans-serif" font-size="${titleSize}"
+      fill="#f4f6f8" font-weight="600">${text}</text>
+    ${
+      subtitle
+        ? `<text x="50%" y="${Math.round(output.height * 0.54)}" text-anchor="middle"
+      font-family="DejaVu Sans, Arial, sans-serif" font-size="${subSize}"
+      fill="#a8b0bb">${subtitle}</text>`
+        : ""
+    }
+  </g>
+</svg>`;
+  const png = await sharp(Buffer.from(svg)).png().toBuffer();
+  const camera: ResolvedCamera = {
+    cx: output.width / 2,
+    cy: output.height / 2,
+    zoom: 1,
+    crop: { x: 0, y: 0, w: output.width, h: output.height },
+  };
+  return { png, camera, warnings: [] };
+}
+
 export async function composeFrame(
   input: ComposeInput,
 ): Promise<ComposeResult> {
+  if (isCardShot(input.shot)) {
+    return composeCardFrame({
+      shot: input.shot,
+      tLocal: input.tLocal,
+      output: input.output,
+    });
+  }
+
   const { take, shot, tLocal, output, defaults } = input;
+  if (!take || !input.sourceFramePath) {
+    throw new ToolError(
+      "RENDER_FAILED",
+      "take shots require source frame and take meta",
+    );
+  }
   const warnings: string[] = [];
 
   const cam = cameraForShotTime(
@@ -256,7 +353,7 @@ export async function composeFrame(
       const withCallouts = await applyCallouts({
         basePng: base,
         callouts: input.callouts,
-        takeId: shot.take,
+        takeId: shot.take!,
         tSrc: input.tSrc,
         camera: cam.camera,
         output,
